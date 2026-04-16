@@ -2,6 +2,7 @@ import type { BacktestResults } from '../api/types';
 
 interface Props {
   results: BacktestResults;
+  stoppedOut?: boolean;
 }
 
 interface MetricTileProps {
@@ -27,7 +28,7 @@ function MetricTile({ label, value, good, sub }: MetricTileProps) {
   );
 }
 
-export function ResultCard({ results }: Props) {
+export function ResultCard({ results, stoppedOut }: Props) {
   const {
     total_return_pct,
     win_rate_pct,
@@ -39,6 +40,8 @@ export function ResultCard({ results }: Props) {
     final_capital,
     avg_win_r,
     avg_loss_r,
+    max_consec_wins,
+    max_consec_losses,
     compound,
   } = results;
 
@@ -46,9 +49,11 @@ export function ResultCard({ results }: Props) {
     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
       <MetricTile
         label="Total Return"
-        value={`${total_return_pct >= 0 ? '+' : ''}${total_return_pct.toFixed(2)}%`}
+        value={stoppedOut ? '-100%' : `${total_return_pct >= 0 ? '+' : ''}${total_return_pct.toFixed(2)}%`}
         good={total_return_pct >= 0}
-        sub={`$${initial_capital.toLocaleString()} → $${final_capital.toLocaleString()}`}
+        sub={stoppedOut
+          ? `$${initial_capital.toLocaleString()} → $0 · STOP OUT`
+          : `$${initial_capital.toLocaleString()} → $${final_capital.toLocaleString()}`}
       />
       <MetricTile
         label="Win Rate"
@@ -85,6 +90,16 @@ export function ResultCard({ results }: Props) {
         label="Avg Loss"
         value={`${avg_loss_r.toFixed(2)}R`}
         good={false}
+      />
+      <MetricTile
+        label="Max Consec. Wins"
+        value={String(max_consec_wins ?? 0)}
+        good={null}
+      />
+      <MetricTile
+        label="Max Consec. Losses"
+        value={String(max_consec_losses ?? 0)}
+        good={null}
       />
     </div>
   );

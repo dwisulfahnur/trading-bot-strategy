@@ -216,16 +216,6 @@ def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float
     if not trades:
         return {}
 
-    wins   = [t for t in trades if t.pnl_r > 0]
-    losses = [t for t in trades if t.pnl_r <= 0]
-
-    win_rate      = round(len(wins) / len(trades) * 100, 2)
-    gross_profit  = sum(t.pnl_r for t in wins)
-    gross_loss    = abs(sum(t.pnl_r for t in losses)) or 1e-9
-    profit_factor = round(gross_profit / gross_loss, 4)
-    avg_win       = round(sum(t.pnl_r for t in wins)   / len(wins),   4) if wins   else 0.0
-    avg_loss      = round(sum(t.pnl_r for t in losses) / len(losses), 4) if losses else 0.0
-
     # Equity curve + trade log
     capital      = initial_capital
     risk_amount  = initial_capital * risk_pct   # fixed for non-compound
@@ -233,22 +223,24 @@ def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float
     max_dd       = 0.0
     equity_curve = []
     trade_log    = []
+    stopped_out  = False
 
     for i, t in enumerate(trades):
-        risk_at_entry = capital * risk_pct if compound else risk_amount
-        lot_size = round(risk_at_entry / t._initial_sl_dist / 100, 2) if t._initial_sl_dist > 0 else 0.0
+        risk_at_entry  = capital * risk_pct if compound else risk_amount
+        lot_size       = round(risk_at_entry / t._initial_sl_dist / 100, 2) if t._initial_sl_dist > 0 else 0.0
         commission_usd = round(lot_size * commission_per_lot * 2, 2)  # round-trip (entry + exit)
-        profit_usd = round(risk_at_entry * t.pnl_r - commission_usd, 2)
-        capital += profit_usd
+        profit_usd     = round(risk_at_entry * t.pnl_r - commission_usd, 2)
+        capital        = max(0.0, round(capital + profit_usd, 2))
+
         if capital > peak:
             peak = capital
-        dd = (peak - capital) / peak * 100
+        dd = (peak - capital) / peak * 100 if peak > 0 else 100.0
         if dd > max_dd:
             max_dd = dd
 
         equity_curve.append({
             "trade":       i + 1,
-            "capital":     round(capital, 2),
+            "capital":     capital,
             "direction":   "long" if t.direction == 1 else "short",
             "exit_reason": t.exit_reason,
             "pnl_r":       round(t.pnl_r, 4),
@@ -256,29 +248,58 @@ def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float
         })
 
         trade_log.append({
-            "trade":        i + 1,
-            "year":         t.year,
-            "direction":    "long" if t.direction == 1 else "short",
-            "entry_time":   str(t.entry_time),
-            "entry_price":  round(t.entry_price, 3),
-            "sl":           round(t.sl, 3),
-            "tp":           round(t.tp, 3),
-            "exit_time":    str(t.exit_time),
-            "exit_price":   round(t.exit_price, 3),
-            "exit_reason":  t.exit_reason,
-            "pnl_r":        round(t.pnl_r, 4),
-            "lot_size":     lot_size,
+            "trade":          i + 1,
+            "year":           t.year,
+            "direction":      "long" if t.direction == 1 else "short",
+            "entry_time":     str(t.entry_time),
+            "entry_price":    round(t.entry_price, 3),
+            "sl":             round(t.sl, 3),
+            "tp":             round(t.tp, 3),
+            "exit_time":      str(t.exit_time),
+            "exit_price":     round(t.exit_price, 3),
+            "exit_reason":    t.exit_reason,
+            "pnl_r":          round(t.pnl_r, 4),
+            "lot_size":       lot_size,
             "commission_usd": commission_usd,
-            "profit_usd":   profit_usd,
-            "capital_after": round(capital, 2),
+            "profit_usd":     profit_usd,
+            "capital_after":  capital,
         })
 
-    total_return = round((capital - initial_capital) / initial_capital * 100, 4)
+        if capital <= 0:
+            stopped_out = True
+            break
 
-    # Per-year
+    # Summary stats computed only over executed trades
+    executed    = trades[:len(trade_log)]
+    wins        = [t for t in executed if t.pnl_r > 0]
+    losses      = [t for t in executed if t.pnl_r <= 0]
+    win_rate    = round(len(wins) / len(executed) * 100, 2) if executed else 0.0
+    gross_profit = sum(t.pnl_r for t in wins)
+    gross_loss  = abs(sum(t.pnl_r for t in losses)) or 1e-9
+    profit_factor = round(gross_profit / gross_loss, 4)
+    avg_win     = round(sum(t.pnl_r for t in wins)   / len(wins),   4) if wins   else 0.0
+    avg_loss    = round(sum(t.pnl_r for t in losses) / len(losses), 4) if losses else 0.0
+    total_return = -100.0 if stopped_out else round((capital - initial_capital) / initial_capital * 100, 4)
+
+    # Consecutive win/loss streaks
+    max_consec_wins = max_consec_losses = 0
+    cur_wins = cur_losses = 0
+    for t in executed:
+        if t.pnl_r > 0:
+            cur_wins   += 1
+            cur_losses  = 0
+            if cur_wins > max_consec_wins:
+                max_consec_wins = cur_wins
+        else:
+            cur_losses += 1
+            cur_wins    = 0
+            if cur_losses > max_consec_losses:
+                max_consec_losses = cur_losses
+
+    # Per-year (only executed trades)
     per_year = {}
-    for yr in sorted({t.year for t in trades}):
-        yt = [t for t in trades if t.year == yr]
+    for yr in sorted({t.year for t in executed}):
+        yt = [t for t in executed if t.year == yr]
         yw = [t for t in yt if t.pnl_r > 0]
         per_year[str(yr)] = {
             "total_trades": len(yt),
@@ -287,17 +308,20 @@ def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float
         }
 
     return {
-        "total_trades":       len(trades),
+        "total_trades":       len(executed),
         "win_rate_pct":       win_rate,
         "profit_factor":      profit_factor,
         "total_return_pct":   total_return,
         "initial_capital":    initial_capital,
-        "final_capital":      round(capital, 2),
+        "final_capital":      capital,
         "max_drawdown_pct":   round(max_dd, 4),
         "risk_pct":           risk_pct,
         "commission_per_lot": commission_per_lot,
         "avg_win_r":          avg_win,
         "avg_loss_r":         avg_loss,
+        "max_consec_wins":    max_consec_wins,
+        "max_consec_losses":  max_consec_losses,
+        "stopped_out":        stopped_out,
         "per_year":           per_year,
         "equity_curve":       equity_curve,
         "trades":             trade_log,

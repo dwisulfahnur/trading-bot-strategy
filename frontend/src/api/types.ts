@@ -90,7 +90,10 @@ export interface BacktestResults {
   risk_pct: number;
   avg_win_r: number;
   avg_loss_r: number;
+  max_consec_wins: number;
+  max_consec_losses: number;
   compound: boolean;
+  stopped_out: boolean;
   per_year: Record<string, { total_trades: number; win_rate_pct: number; return_pct: number }>;
   equity_curve: EquityPoint[];
   trades: TradeRecord[];
