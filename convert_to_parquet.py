@@ -141,6 +141,7 @@ def build_ohlcv(year: int, tick_parquet: Path, tf_label: str, tf_truncate: str) 
         .with_columns(
             pl.col("timestamp").dt.truncate(tf_truncate).alias("time"),
             pl.col("bid").alias("price"),
+            (pl.col("ask") - pl.col("bid")).alias("spread"),
         )
         .group_by("time")
         .agg(
@@ -149,6 +150,7 @@ def build_ohlcv(year: int, tick_parquet: Path, tf_label: str, tf_truncate: str) 
             pl.col("price").min().alias("low"),
             pl.col("price").last().alias("close"),
             pl.len().alias("ticks"),
+            pl.col("spread").mean().alias("avg_spread"),
         )
         .sort("time")
         .sink_parquet(out_path, compression="zstd", compression_level=3)

@@ -80,6 +80,7 @@ Strategy discovery is automatic via `importlib` — no other changes needed.
 ## Simulation Engine (`backtest.py`)
 
 - **No lookahead bias**: signal on bar N → entry at bar N+1's open
+- **Spread-aware entry**: longs enter at ask (`open + avg_spread`); shorts enter at bid (`open`). `avg_spread` is the mean tick spread aggregated per bar during OHLCV conversion.
 - **One position at a time**
 - **Exit reasons**: `tp` (take-profit), `sl` (stop-loss), `be` (break-even stop), `end_of_data`
 - **Break-even stop**: when `breakeven_r` is set, SL moves to entry once price reaches `entry ± initial_sl_dist × breakeven_r`

@@ -118,7 +118,9 @@ def simulate(df: pl.DataFrame, breakeven_r: float | None = None) -> list[Trade]:
     for bar in rows:
         # --- Open a pending trade at this bar's open ---
         if pending is not None and position is None:
-            entry_price = bar["open"]
+            spread = bar.get("avg_spread") or 0.0
+            # Longs enter at ask (bid + spread); shorts enter at bid
+            entry_price = bar["open"] + spread if pending["signal"] == 1 else bar["open"]
             sl_dist = abs(entry_price - pending["sl"])
             if sl_dist > 0:
                 position = Trade(
