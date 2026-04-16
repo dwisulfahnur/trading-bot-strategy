@@ -1,0 +1,4 @@
+- Use William Fractal as Breakout Strategy
+- 200 EMA to define the trend
+- If price above 200 EMA, focus on buy
+- If price below 200 EMA, focus on sell

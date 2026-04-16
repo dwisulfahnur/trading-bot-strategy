@@ -1,0 +1,415 @@
+//+------------------------------------------------------------------+
+//| William Fractal Breakout EA                                       |
+//| Strategy: William Fractal Breakout                                |
+//| Platform: MetaTrader 5 (MQL5)                                    |
+//| Instrument: XAUUSD (Gold vs USD)                                 |
+//| Timeframe: H1                                                    |
+//|                                                                  |
+//| Backtest Performance:                                            |
+//|   Total trades : 130                                             |
+//|   Win rate     : 50.8%                                           |
+//|   Profit factor: 1.503                                           |
+//|   Total return : 64.38%                                          |
+//|   Max drawdown : 9.10%                                           |
+//+------------------------------------------------------------------+
+#property copyright "William Fractal Breakout EA"
+#property link      ""
+#property version   "1.00"
+#property strict
+
+#include <Trade\Trade.mqh>
+
+//--- Input parameters
+input int       ema_period        = 200;       // EMA Period
+input int       fractal_n         = 9;         // Fractal N (candles on each side)
+input double    rr_ratio          = 1.5;       // Risk:Reward Ratio
+input string    sideways_filter   = "none";    // Sideways Filter (none)
+input int       adx_period        = 14;        // ADX Period (unused with none filter)
+input int       adx_threshold     = 25;        // ADX Threshold (unused with none filter)
+input int       ema_slope_period  = 10;        // EMA Slope Period (unused)
+input double    ema_slope_min     = 0.5;       // EMA Slope Min (unused)
+input int       choppiness_period = 14;        // Choppiness Period (unused)
+input double    choppiness_max    = 61.8;      // Choppiness Max (unused)
+input int       alligator_jaw     = 13;        // Alligator Jaw (unused)
+input int       alligator_teeth   = 8;         // Alligator Teeth (unused)
+input int       alligator_lips    = 5;         // Alligator Lips (unused)
+input int       stochrsi_rsi_period    = 14;   // StochRSI RSI Period (unused)
+input int       stochrsi_stoch_period  = 14;   // StochRSI Stoch Period (unused)
+input int       stochrsi_oversold      = 20;   // StochRSI Oversold (unused)
+input int       stochrsi_overbought    = 80;   // StochRSI Overbought (unused)
+input ENUM_TIMEFRAMES timeframe   = PERIOD_H1; // Timeframe
+input double    initial_capital   = 10000.0;   // Initial Capital
+input double    risk_pct          = 0.02;      // Risk Percentage per Trade
+input bool      compound          = false;     // Compounding (false = fixed on balance)
+
+//--- Global variables
+CTrade          trade;
+int             ema_handle;
+datetime        last_bar_time;
+double          last_top_fractal;   // Most recent confirmed top fractal price
+double          last_bot_fractal;   // Most recent confirmed bottom fractal price
+int             magic_number = 20250101;
+
+//+------------------------------------------------------------------+
+//| Expert initialization function                                     |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   //--- Create EMA indicator handle
+   ema_handle = iMA(_Symbol, timeframe, ema_period, 0, MODE_EMA, PRICE_CLOSE);
+   if(ema_handle == INVALID_HANDLE)
+   {
+      Print("Failed to create EMA indicator handle");
+      return(INIT_FAILED);
+   }
+   
+   //--- Initialize
+   last_bar_time = 0;
+   last_top_fractal = 0;
+   last_bot_fractal = 0;
+   
+   //--- Setup trade object
+   trade.SetExpertMagicNumber(magic_number);
+   trade.SetDeviationInPoints(30);
+   trade.SetTypeFilling(ORDER_FILLING_FOK);
+   
+   Print("William Fractal Breakout EA initialized successfully");
+   return(INIT_SUCCEEDED);
+}
+
+//+------------------------------------------------------------------+
+//| Expert deinitialization function                                   |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+   if(ema_handle != INVALID_HANDLE)
+      IndicatorRelease(ema_handle);
+}
+
+//+------------------------------------------------------------------+
+//| Check if a position is already open for this EA                   |
+//+------------------------------------------------------------------+
+bool HasOpenPosition()
+{
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
+   {
+      ulong ticket = PositionGetTicket(i);
+      if(ticket > 0)
+      {
+         if(PositionGetString(POSITION_SYMBOL) == _Symbol &&
+            PositionGetInteger(POSITION_MAGIC) == magic_number)
+            return true;
+      }
+   }
+   return false;
+}
+
+//+------------------------------------------------------------------+
+//| Check if bar index is a TOP fractal                               |
+//| A top fractal at bar i means high[i] > high[i±j] for j=1..n     |
+//+------------------------------------------------------------------+
+bool IsTopFractal(const double &high[], int index, int n, int total_bars)
+{
+   // Ensure we have enough bars on both sides
+   if(index - n < 0 || index + n >= total_bars)
+      return false;
+   
+   double center_high = high[index];
+   
+   for(int j = 1; j <= n; j++)
+   {
+      // Check left side (earlier bars, higher index in time-series)
+      if(high[index + j] >= center_high)
+         return false;
+      // Check right side (later bars, lower index in time-series)
+      if(high[index - j] >= center_high)
+         return false;
+   }
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Check if bar index is a BOTTOM fractal                            |
+//| A bottom fractal at bar i means low[i] < low[i±j] for j=1..n    |
+//+------------------------------------------------------------------+
+bool IsBotFractal(const double &low[], int index, int n, int total_bars)
+{
+   // Ensure we have enough bars on both sides
+   if(index - n < 0 || index + n >= total_bars)
+      return false;
+   
+   double center_low = low[index];
+   
+   for(int j = 1; j <= n; j++)
+   {
+      // Check left side
+      if(low[index + j] <= center_low)
+         return false;
+      // Check right side
+      if(low[index - j] <= center_low)
+         return false;
+   }
+   return true;
+}
+
+//+------------------------------------------------------------------+
+//| Calculate lot size based on risk management                       |
+//+------------------------------------------------------------------+
+double CalculateLotSize(double sl_distance_price)
+{
+   if(sl_distance_price <= 0)
+      return 0;
+   
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double risk_amount = balance * risk_pct;
+   
+   // For XAUUSD: contract_size = 100 oz per lot
+   double contract_size = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE);
+   if(contract_size <= 0)
+      contract_size = 100.0; // Default for XAUUSD
+   
+   double lots = risk_amount / (sl_distance_price * contract_size);
+   
+   // Normalize to broker constraints
+   double min_lot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
+   double max_lot = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
+   double lot_step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+   
+   if(lot_step > 0)
+      lots = MathFloor(lots / lot_step) * lot_step;
+   
+   if(lots < min_lot) lots = min_lot;
+   if(lots > max_lot) lots = max_lot;
+   
+   return NormalizeDouble(lots, 2);
+}
+
+//+------------------------------------------------------------------+
+//| Expert tick function                                               |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+   //--- Only process on new bar
+   datetime current_bar_time[];
+   if(CopyTime(_Symbol, timeframe, 0, 1, current_bar_time) < 1)
+      return;
+   
+   if(current_bar_time[0] == last_bar_time)
+      return;
+   last_bar_time = current_bar_time[0];
+   
+   //--- Minimum bars check: we need at least ema_period + fractal_n*2 + some buffer
+   int min_bars_required = MathMax(ema_period, fractal_n * 2 + 10) + 50;
+   int available_bars = iBars(_Symbol, timeframe);
+   if(available_bars < min_bars_required)
+   {
+      Print("Not enough bars: ", available_bars, " < ", min_bars_required);
+      return;
+   }
+   
+   //--- We need bars indexed as time-series (0 = current, 1 = previous, etc.)
+   // We'll copy enough data to scan for fractals
+   // The most recent confirmed fractal is at bar index = fractal_n (the center)
+   // confirmed fractal_n bars after it forms, so we look at shift fractal_n from the center
+   // A fractal at center bar C is confirmed at bar C - fractal_n (in time-series indexing)
+   // The earliest confirmed fractal center is at index fractal_n (confirmed at bar 0)
+   // We scan deeper to find the last confirmed fractals
+   
+   int bars_to_copy = min_bars_required;
+   
+   double close[];
+   double high[];
+   double low[];
+   double open[];
+   double ema_values[];
+   
+   ArraySetAsSeries(close, true);
+   ArraySetAsSeries(high, true);
+   ArraySetAsSeries(low, true);
+   ArraySetAsSeries(open, true);
+   ArraySetAsSeries(ema_values, true);
+   
+   if(CopyClose(_Symbol, timeframe, 0, bars_to_copy, close) < bars_to_copy) return;
+   if(CopyHigh(_Symbol, timeframe, 0, bars_to_copy, high) < bars_to_copy) return;
+   if(CopyLow(_Symbol, timeframe, 0, bars_to_copy, low) < bars_to_copy) return;
+   if(CopyOpen(_Symbol, timeframe, 0, bars_to_copy, open) < bars_to_copy) return;
+   if(CopyBuffer(ema_handle, 0, 0, bars_to_copy, ema_values) < bars_to_copy) return;
+   
+   //--- Signal is checked on the CLOSED bar (bar index 1), executed at next bar open (bar 0)
+   // Bar 0 = current (incomplete) bar
+   // Bar 1 = most recently closed bar (signal bar)
+   // Bar 2 = bar before signal bar (for cross detection)
+   
+   //--- Find most recent confirmed top and bottom fractals
+   // A fractal centered at bar index C is confirmed when fractal_n bars have passed after it
+   // In time-series indexing, the fractal center at bar C is confirmed when current bar is at C - fractal_n
+   // So a confirmed fractal at the signal check time (bar 1) has its center at bar >= fractal_n + 1
+   // The minimum confirmed center index is fractal_n + 1 (confirmed 1 bar ago or more, visible at bar 1)
+   // Actually: fractal at center C needs C-fractal_n bars to pass. In time series:
+   // center = fractal_n means the right side bars are 0..fractal_n-1, and bar 0 is current incomplete
+   // To avoid lookahead, we consider fractal confirmed only if center index >= fractal_n + 1
+   // (all right-side bars up to index 1 are closed)
+   
+   // Scan for the most recent confirmed top and bottom fractals
+   // Start from the smallest valid center index and go backwards (larger index = older)
+   // The fractal_n bars to the right of center must all be completed bars (index >= 1)
+   // So minimum center index = fractal_n + 1 (right side bars: center-1 .. center-fractal_n = 1)
+   // Wait: in time-series, index 0 is newest. A center at index C has:
+   //   right side bars (newer): C-1, C-2, ..., C-fractal_n
+   //   left side bars (older):  C+1, C+2, ..., C+fractal_n
+   // For center C: the rightmost (newest) bar checked is C - fractal_n
+   // This bar must be a completed bar, so C - fractal_n >= 1
+   // Therefore C >= fractal_n + 1
+   
+   int min_center = fractal_n + 1; // minimum center index for confirmed fractal as of bar 1
+   
+   // Reset fractal tracking
+   last_top_fractal = 0;
+   last_bot_fractal = 0;
+   
+   // Scan from most recent possible confirmed fractal to older ones
+   // We need to find the MOST RECENT (smallest center index) confirmed top and bottom
+   for(int c = min_center; c < bars_to_copy - fractal_n; c++)
+   {
+      if(last_top_fractal == 0 && IsTopFractal(high, c, fractal_n, bars_to_copy))
+      {
+         last_top_fractal = high[c];
+      }
+      if(last_bot_fractal == 0 && IsBotFractal(low, c, fractal_n, bars_to_copy))
+      {
+         last_bot_fractal = low[c];
+      }
+      // If both found, stop scanning
+      if(last_top_fractal != 0 && last_bot_fractal != 0)
+         break;
+   }
+   
+   //--- Check if we have valid fractal levels
+   if(last_top_fractal == 0 || last_bot_fractal == 0)
+      return; // Not enough data to determine fractal levels
+   
+   //--- Get EMA value at signal bar (bar 1)
+   double ema_signal = ema_values[1];
+   
+   //--- Signal bar values
+   double signal_close = close[1];   // Close of the completed bar
+   double prev_close   = close[2];   // Close of bar before signal bar
+   double signal_high  = high[1];
+   double signal_low   = low[1];
+   
+   //--- Check if already in a position
+   if(HasOpenPosition())
+      return;
+   
+   //--- Apply sideways filter (none = all signals pass)
+   // No filtering needed
+   
+   //--- BUY signal: close > EMA AND close crosses above last_top
+   // Cross above: current close > last_top AND previous close <= last_top
+   bool buy_signal = false;
+   if(signal_close > ema_signal &&
+      signal_close > last_top_fractal &&
+      prev_close <= last_top_fractal)
+   {
+      buy_signal = true;
+   }
+   
+   //--- SELL signal: close < EMA AND close crosses below last_bot
+   // Cross below: current close < last_bot AND previous close >= last_bot
+   bool sell_signal = false;
+   if(signal_close < ema_signal &&
+      signal_close < last_bot_fractal &&
+      prev_close >= last_bot_fractal)
+   {
+      sell_signal = true;
+   }
+   
+   //--- Execute trades at next bar open (which is now, bar 0 just opened)
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double point = SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   double stops_level = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL) * point;
+   
+   if(buy_signal)
+   {
+      //--- BUY: SL = low of signal bar, TP = entry + rr_ratio * (entry - SL)
+      double entry_price = ask;
+      double sl = signal_low;
+      double sl_distance = entry_price - sl;
+      
+      // Validate SL distance
+      if(sl_distance <= 0 || sl_distance < stops_level)
+      {
+         Print("BUY signal rejected: invalid SL distance ", sl_distance);
+         return;
+      }
+      
+      double tp = entry_price + rr_ratio * sl_distance;
+      
+      // Normalize prices
+      sl = NormalizeDouble(sl, digits);
+      tp = NormalizeDouble(tp, digits);
+      entry_price = NormalizeDouble(entry_price, digits);
+      
+      // Calculate lot size
+      double lots = CalculateLotSize(sl_distance);
+      if(lots <= 0)
+      {
+         Print("BUY signal rejected: lot size = 0");
+         return;
+      }
+      
+      // Place buy order
+      if(!trade.Buy(lots, _Symbol, entry_price, sl, tp, "Fractal Breakout BUY"))
+      {
+         Print("Buy order failed: ", trade.ResultRetcode(), " - ", trade.ResultRetcodeDescription());
+      }
+      else
+      {
+         Print("BUY opened: lots=", lots, " entry=", entry_price, " SL=", sl, " TP=", tp,
+               " TopFractal=", last_top_fractal, " EMA=", ema_signal);
+      }
+   }
+   else if(sell_signal)
+   {
+      //--- SELL: SL = high of signal bar, TP = entry - rr_ratio * (SL - entry)
+      double entry_price = bid;
+      double sl = signal_high;
+      double sl_distance = sl - entry_price;
+      
+      // Validate SL distance
+      if(sl_distance <= 0 || sl_distance < stops_level)
+      {
+         Print("SELL signal rejected: invalid SL distance ", sl_distance);
+         return;
+      }
+      
+      double tp = entry_price - rr_ratio * sl_distance;
+      
+      // Normalize prices
+      sl = NormalizeDouble(sl, digits);
+      tp = NormalizeDouble(tp, digits);
+      entry_price = NormalizeDouble(entry_price, digits);
+      
+      // Calculate lot size
+      double lots = CalculateLotSize(sl_distance);
+      if(lots <= 0)
+      {
+         Print("SELL signal rejected: lot size = 0");
+         return;
+      }
+      
+      // Place sell order
+      if(!trade.Sell(lots, _Symbol, entry_price, sl, tp, "Fractal Breakout SELL"))
+      {
+         Print("Sell order failed: ", trade.ResultRetcode(), " - ", trade.ResultRetcodeDescription());
+      }
+      else
+      {
+         Print("SELL opened: lots=", lots, " entry=", entry_price, " SL=", sl, " TP=", tp,
+               " BotFractal=", last_bot_fractal, " EMA=", ema_signal);
+      }
+   }
+}
+//+------------------------------------------------------------------+

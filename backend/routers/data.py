@@ -1,0 +1,157 @@
+"""
+Data-related endpoints:
+  GET /strategies
+  GET /data/available
+  GET /ohlcv
+"""
+
+import importlib
+import inspect
+from pathlib import Path
+
+import polars as pl
+from fastapi import APIRouter, HTTPException, Query
+
+from backend.models import DataAvailable, StrategyMeta, ParameterSpec
+from strategies.base import BaseStrategy
+
+router = APIRouter()
+
+STRATEGIES_DIR = Path(__file__).parent.parent.parent / "strategies"
+DATA_DIR = Path(__file__).parent.parent.parent / "data" / "parquet" / "ohlcv"
+VALID_TIMEFRAMES = ["M1", "M5", "M15", "H1", "H4"]
+
+# ---------------------------------------------------------------------------
+# Hard-coded parameter specs per strategy (extend as new strategies added)
+# ---------------------------------------------------------------------------
+STRATEGY_PARAMS: dict[str, list[dict]] = {
+    "william_fractals": [
+        {"name": "ema_period",        "type": "int",   "default": 200,   "min": 10,   "max": 500},
+        {"name": "fractal_n",         "type": "int",   "default": 9,     "min": 2,    "max": 20},
+        {"name": "rr_ratio",          "type": "float", "default": 1.5,   "min": 0.5,  "max": 5.0,  "step": 0.1},
+        # Sideways / ranging filter
+        {"name": "sideways_filter",   "type": "str",   "default": "none",
+         "options": ["none", "adx", "ema_slope", "choppiness", "alligator", "stochrsi"]},
+        {"name": "adx_period",        "type": "int",   "default": 14,    "min": 5,    "max": 50},
+        {"name": "adx_threshold",     "type": "float", "default": 25.0,  "min": 10.0, "max": 50.0, "step": 1.0},
+        {"name": "ema_slope_period",  "type": "int",   "default": 10,    "min": 2,    "max": 50},
+        {"name": "ema_slope_min",     "type": "float", "default": 0.5,   "min": 0.1,  "max": 10.0, "step": 0.1},
+        {"name": "choppiness_period", "type": "int",   "default": 14,    "min": 5,    "max": 50},
+        {"name": "choppiness_max",    "type": "float", "default": 61.8,  "min": 50.0, "max": 80.0, "step": 0.1},
+        # Alligator sub-params
+        {"name": "alligator_jaw",     "type": "int",   "default": 13,    "min": 5,    "max": 50},
+        {"name": "alligator_teeth",   "type": "int",   "default": 8,     "min": 3,    "max": 30},
+        {"name": "alligator_lips",    "type": "int",   "default": 5,     "min": 2,    "max": 20},
+        # StochRSI sub-params
+        {"name": "stochrsi_rsi_period",   "type": "int",   "default": 14,   "min": 5,    "max": 50},
+        {"name": "stochrsi_stoch_period", "type": "int",   "default": 14,   "min": 3,    "max": 50},
+        {"name": "stochrsi_oversold",     "type": "float", "default": 20.0, "min": 5.0,  "max": 40.0, "step": 1.0},
+        {"name": "stochrsi_overbought",   "type": "float", "default": 80.0, "min": 60.0, "max": 95.0, "step": 1.0},
+    ],
+}
+
+DISPLAY_NAMES: dict[str, str] = {
+    "william_fractals": "William Fractal Breakout",
+}
+
+
+def _discover_strategies() -> list[str]:
+    """Return module names (file stems) of all BaseStrategy subclasses in strategies/."""
+    names = []
+    for path in sorted(STRATEGIES_DIR.glob("*.py")):
+        if path.name.startswith("_"):
+            continue
+        module_name = f"strategies.{path.stem}"
+        try:
+            mod = importlib.import_module(module_name)
+        except Exception:
+            continue
+        has_strategy = any(
+            isinstance(v, type) and issubclass(v, BaseStrategy) and v is not BaseStrategy
+            for v in vars(mod).values()
+        )
+        if has_strategy:
+            names.append(path.stem)
+    return names
+
+
+@router.get("/strategies", response_model=list[StrategyMeta])
+def get_strategies() -> list[StrategyMeta]:
+    result = []
+    for name in _discover_strategies():
+        params_raw = STRATEGY_PARAMS.get(name, [])
+        params = [ParameterSpec(**p) for p in params_raw]
+        result.append(StrategyMeta(
+            name=name,
+            display_name=DISPLAY_NAMES.get(name, name.replace("_", " ").title()),
+            parameters=params,
+        ))
+    return result
+
+
+@router.get("/data/available", response_model=DataAvailable)
+def get_data_available() -> DataAvailable:
+    years: set[int] = set()
+    timeframes: set[str] = set()
+    for tf in VALID_TIMEFRAMES:
+        tf_dir = DATA_DIR / tf
+        if not tf_dir.exists():
+            continue
+        for f in tf_dir.glob("*.parquet"):
+            # filename: XAUUSD_H1_2025.parquet
+            parts = f.stem.split("_")
+            if len(parts) >= 3:
+                try:
+                    years.add(int(parts[-1]))
+                    timeframes.add(tf)
+                except ValueError:
+                    pass
+    return DataAvailable(years=sorted(years), timeframes=[tf for tf in VALID_TIMEFRAMES if tf in timeframes])
+
+
+@router.get("/ohlcv")
+def get_ohlcv(
+    timeframe: str = Query(...),
+    years: str = Query(..., description="Comma-separated years, e.g. 2025,2026"),
+    date_from: str | None = Query(None, description="ISO date filter start (inclusive)"),
+    date_to: str | None = Query(None, description="ISO date filter end (inclusive)"),
+) -> list[dict]:
+    if timeframe not in VALID_TIMEFRAMES:
+        raise HTTPException(400, f"Invalid timeframe. Choose from {VALID_TIMEFRAMES}")
+
+    year_list = []
+    for y in years.split(","):
+        try:
+            year_list.append(int(y.strip()))
+        except ValueError:
+            raise HTTPException(400, f"Invalid year: {y}")
+
+    frames = []
+    for year in sorted(year_list):
+        path = DATA_DIR / timeframe / f"XAUUSD_{timeframe}_{year}.parquet"
+        if not path.exists():
+            continue
+        frames.append(pl.read_parquet(path))
+
+    if not frames:
+        raise HTTPException(404, "No OHLCV data found for requested years/timeframe")
+
+    df = pl.concat(frames).sort("time")
+
+    if date_from:
+        dt_from = pl.lit(date_from).str.to_datetime(format="%Y-%m-%d", time_unit="ms").dt.replace_time_zone("UTC")
+        df = df.filter(pl.col("time") >= dt_from)
+    if date_to:
+        dt_to = pl.lit(date_to).str.to_datetime(format="%Y-%m-%d", time_unit="ms").dt.replace_time_zone("UTC")
+        df = df.filter(pl.col("time") <= dt_to)
+
+    return [
+        {
+            "time": row["time"].isoformat() if hasattr(row["time"], "isoformat") else str(row["time"]),
+            "open":  round(row["open"],  3),
+            "high":  round(row["high"],  3),
+            "low":   round(row["low"],   3),
+            "close": round(row["close"], 3),
+        }
+        for row in df.select(["time", "open", "high", "low", "close"]).to_dicts()
+    ]

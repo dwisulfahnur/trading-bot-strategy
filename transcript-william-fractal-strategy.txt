@@ -1,0 +1,107 @@
+The Williams fractal indicator is a
+powerful tool for identifying key levels
+in the market. In this guide, we'll
+explore how to use it to build
+profitable day trading strategies.
+Williams fractal is a simple but very
+useful indicator that helps identify key
+support and resistance levels. If a top
+fractal appears, it marks a potential
+resistance level. If a bottom fractal
+appears, it marks a potential support
+level. How is a fractal formed? A top
+fractal appears when the high of a
+candle is higher than the highs of the
+two candles to the left and two to the
+right. A bottom fractal appears when the
+low of the candle is lower than the lows
+of the two candles to the left and two
+to the right. An important note, a
+fractal forms with a delay of two
+candles because the indicator only
+confirms after those candles close. The
+problem with the standard indicator is
+that it shows too many fractals, which
+can be confusing. On an active market
+such as the 1-hour chart, you might see
+dozens of fractals, many of which don't
+provide reliable signals. The solution
+is to use a custom indicator such as
+Williams trailing stop-loss. It allows
+you to change the fractal range. I
+recommend disabling unnecessary lines in
+the settings and increasing the range
+from 5 to 9 candles. This helps filter
+out noise, leaving only the key levels,
+making your analysis cleaner and your
+trading decisions easier. What not to
+do? Beginners often use fractals as
+reversal signals. A bottom fractal
+appears, they buy. A top fractal
+appears, they sell. In practice, this
+strategy gives a low percentage of
+profitable trades and does not perform
+well. Instead, I recommend using
+fractalss as breakout signals, filtering
+them with a trend using the 200 EMA. How
+does this work? Add the 200 EMA to
+define the trend. If price is above the
+200 EMA, focus on top fractals for
+buying opportunities. If price is below
+the 200 EMA, focus on bottom fractals
+for selling opportunities. Wait for a
+candle to close above the last top
+fractal for a buy or below the last
+bottom fractal for a sell. Set your stop
+loss below the entry candle for buys or
+above it for sells. Take profit should
+be 1 and a half times the size of your
+stop-loss. Example one, price is above
+the 200 EMA. A breakout of the top
+fractal occurs. This gives us a buy
+signal. Place the stop loss below the
+entry candle and set the take-profit one
+and a half times the stop. Example two.
+Price is below the 200 EMA. A breakout
+of the bottom fractal occurs. This gives
+us a sell signal. Place the stop loss
+above the entry candle and set the
+takerit 1 and 1/2 times the stop. Now
+you know how to use Williams fractal as
+a breakout strategy. For more accurate
+entries, combine it with the alligator
+and stochastic RSI indicators. Start by
+identifying the trend using the
+alligator. All three lines should be
+moving in the same direction and be
+separated. If all three lines are
+pointing up, the market is in an uptrend
+and we look for by trades. If they are
+pointing down, it's a downtrend and we
+look for sells. Avoid sideways markets
+where the lines are crossing each other.
+Entry condition. In an uptrend, wait for
+a bottom fractal to appear while the
+stoastic RSI is in the oversold zone
+below 20. In a downtrend, wait for a top
+fractal while the stoastic RSI is in the
+overbought zone above 80. Stop loss
+should be set below the fractal for buys
+and above it for sells. Close the trade
+when price reaches the alligator's
+middle line. Example, the market is in
+an uptrend, a bottom fractal forms, and
+the stochastic RSI is oversold. Enter a
+buy trade. When price reaches the
+alligator's middle line, close the
+position and take profit. You now have
+two effective fractalbased strategies.
+The first is a breakout strategy
+filtered by the 200 EMA. The second is a
+trend following pullback strategy
+confirmed by the alligator and
+stochastic RSI. Both strategies are easy
+to apply and can be adapted to your
+trading system. The key is to be
+patient, filter your signals carefully,
+and follow riskmanagement rules.
