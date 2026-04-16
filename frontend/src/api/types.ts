@@ -27,6 +27,7 @@ export interface BacktestRequest {
   risk_pct: number;
   compound: boolean;
   breakeven_r: number | null;
+  commission_per_lot: number;
   params: Record<string, number | boolean | string>;
 }
 
@@ -73,6 +74,7 @@ export interface TradeRecord {
   exit_reason: 'tp' | 'sl' | 'be' | 'end_of_data';
   pnl_r: number;
   lot_size: number;
+  commission_usd: number;
   profit_usd: number;
   capital_after: number;
 }

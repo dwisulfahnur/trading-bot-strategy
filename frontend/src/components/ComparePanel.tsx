@@ -80,6 +80,7 @@ function formatParam(key: string, val: unknown): string {
   if (typeof val === 'boolean') return val ? 'Yes' : 'No';
   if (key === 'risk_pct') return `${((val as number) * 100).toFixed(1)}%`;
   if (key === 'initial_capital') return `$${(val as number).toLocaleString()}`;
+  if (key === 'commission_per_lot') return `$${(val as number).toFixed(2)}`;
   if (typeof val === 'number') return String(val);
   return String(val);
 }
@@ -117,6 +118,7 @@ export function ComparePanel({ results, onRemove }: Props) {
     { key: 'risk_pct', label: 'Risk %' },
     { key: 'compound', label: 'Compound' },
     { key: 'breakeven_r', label: 'Break-even R' },
+    { key: 'commission_per_lot', label: 'Commission/Lot' },
   ];
 
   // A value is "different" if not all results share the same value for that param

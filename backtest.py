@@ -212,7 +212,7 @@ def simulate(df: pl.DataFrame, breakeven_r: float | None = None) -> list[Trade]:
 # Metrics
 # ---------------------------------------------------------------------------
 
-def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float, compound: bool = True) -> dict:
+def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float, compound: bool = True, commission_per_lot: float = 3.5) -> dict:
     if not trades:
         return {}
 
@@ -236,16 +236,15 @@ def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float
 
     for i, t in enumerate(trades):
         risk_at_entry = capital * risk_pct if compound else risk_amount
-        capital += risk_at_entry * t.pnl_r
+        lot_size = round(risk_at_entry / t._initial_sl_dist / 100, 2) if t._initial_sl_dist > 0 else 0.0
+        commission_usd = round(lot_size * commission_per_lot * 2, 2)  # round-trip (entry + exit)
+        profit_usd = round(risk_at_entry * t.pnl_r - commission_usd, 2)
+        capital += profit_usd
         if capital > peak:
             peak = capital
         dd = (peak - capital) / peak * 100
         if dd > max_dd:
             max_dd = dd
-
-        # Lot size in standard lots (1 lot = 100 oz for XAUUSD)
-        lot_size = round(risk_at_entry / t._initial_sl_dist / 100, 2) if t._initial_sl_dist > 0 else 0.0
-        profit_usd = round(risk_at_entry * t.pnl_r, 2)
 
         equity_curve.append({
             "trade":       i + 1,
@@ -269,6 +268,7 @@ def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float
             "exit_reason":  t.exit_reason,
             "pnl_r":        round(t.pnl_r, 4),
             "lot_size":     lot_size,
+            "commission_usd": commission_usd,
             "profit_usd":   profit_usd,
             "capital_after": round(capital, 2),
         })
@@ -287,19 +287,20 @@ def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float
         }
 
     return {
-        "total_trades":     len(trades),
-        "win_rate_pct":     win_rate,
-        "profit_factor":    profit_factor,
-        "total_return_pct": total_return,
-        "initial_capital":  initial_capital,
-        "final_capital":    round(capital, 2),
-        "max_drawdown_pct": round(max_dd, 4),
-        "risk_pct":         risk_pct,
-        "avg_win_r":        avg_win,
-        "avg_loss_r":       avg_loss,
-        "per_year":         per_year,
-        "equity_curve":     equity_curve,
-        "trades":           trade_log,
+        "total_trades":       len(trades),
+        "win_rate_pct":       win_rate,
+        "profit_factor":      profit_factor,
+        "total_return_pct":   total_return,
+        "initial_capital":    initial_capital,
+        "final_capital":      round(capital, 2),
+        "max_drawdown_pct":   round(max_dd, 4),
+        "risk_pct":           risk_pct,
+        "commission_per_lot": commission_per_lot,
+        "avg_win_r":          avg_win,
+        "avg_loss_r":         avg_loss,
+        "per_year":           per_year,
+        "equity_curve":       equity_curve,
+        "trades":             trade_log,
     }
 
 
@@ -372,11 +373,12 @@ def save_result(
         "strategy":   strategy_name,
         "parameters": {
             **strategy_params,
-            "timeframe":       timeframe,
-            "years":           years,
-            "initial_capital": metrics.get("initial_capital"),
-            "risk_pct":        metrics.get("risk_pct"),
-            "compound":        metrics.get("compound", True),
+            "timeframe":         timeframe,
+            "years":             years,
+            "initial_capital":   metrics.get("initial_capital"),
+            "risk_pct":          metrics.get("risk_pct"),
+            "compound":          metrics.get("compound", True),
+            "commission_per_lot": metrics.get("commission_per_lot", 3.5),
         },
         "results": metrics,
     }
@@ -418,6 +420,8 @@ def parse_args() -> argparse.Namespace:
                    help="Use fixed risk amount (non-compounding) instead of % of current capital")
     p.add_argument("--breakeven_r",    type=float, default=None,
                    help="Move SL to entry when profit reaches this R multiple (e.g. 1.0, 0.5, 1.3). Omit to disable.")
+    p.add_argument("--commission",     type=float, default=3.5,
+                   help="Commission charged per lot round-trip in USD (default: 3.5)")
 
     return p.parse_args()
 
@@ -448,7 +452,7 @@ def main() -> None:
     print(f"  {len(trades)} trades executed")
 
     compound = not args.no_compound
-    metrics = compute_metrics(trades, args.capital, args.risk, compound=compound)
+    metrics = compute_metrics(trades, args.capital, args.risk, compound=compound, commission_per_lot=args.commission)
     metrics["compound"] = compound
     metrics["breakeven_r"] = breakeven_r
     print_report(metrics, strategy.name, args.timeframe, args.years)

@@ -39,6 +39,7 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
         risk_pct = request_data["risk_pct"]
         compound = request_data["compound"]
         breakeven_r = request_data.get("breakeven_r", None)
+        commission_per_lot = request_data.get("commission_per_lot", 3.5)
         params = request_data.get("params", {})
 
         df = load_data(years, timeframe)
@@ -46,7 +47,7 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
         df = strategy.generate_signals(df)
         trades = simulate(df, breakeven_r=breakeven_r)
 
-        metrics = compute_metrics(trades, initial_capital, risk_pct, compound=compound)
+        metrics = compute_metrics(trades, initial_capital, risk_pct, compound=compound, commission_per_lot=commission_per_lot)
         metrics["compound"] = compound
         metrics["breakeven_r"] = breakeven_r
 

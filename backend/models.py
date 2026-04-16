@@ -17,6 +17,7 @@ class BacktestRequest(BaseModel):
     risk_pct: float = Field(default=0.02, gt=0, le=1)
     compound: bool = False
     breakeven_r: float | None = None
+    commission_per_lot: float = Field(default=3.5, ge=0)
     params: dict[str, Any] = Field(default_factory=dict)
 
 
@@ -66,6 +67,7 @@ class TradeRecord(BaseModel):
     exit_reason: str
     pnl_r: float
     lot_size: float
+    commission_usd: float
     profit_usd: float
     capital_after: float
 

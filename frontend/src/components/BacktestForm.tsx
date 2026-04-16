@@ -26,6 +26,7 @@ export function BacktestForm({ onResult }: Props) {
   const [compound, setCompound] = useState(false);
   const [breakevenOn, setBreakevenOn] = useState(false);
   const [breakevenR, setBreakevenR] = useState(1.0);
+  const [commissionPerLot, setCommissionPerLot] = useState(3.5);
   const [stratParams, setStratParams] = useState<Record<string, number | string>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -87,6 +88,7 @@ export function BacktestForm({ onResult }: Props) {
         risk_pct: riskPct / 100,
         compound,
         breakeven_r: breakevenOn ? breakevenR : null,
+        commission_per_lot: commissionPerLot,
         params: stratParams,
       };
       const job = await api.runBacktest(req);
@@ -193,6 +195,21 @@ export function BacktestForm({ onResult }: Props) {
           <span>0.5%</span>
           <span>5%</span>
         </div>
+      </div>
+
+      {/* Commission */}
+      <div>
+        <label className="block text-sm font-medium text-slate-300 mb-1">
+          Commission per Lot (USD, round-trip)
+        </label>
+        <input
+          type="number"
+          value={commissionPerLot}
+          min={0}
+          step={0.5}
+          onChange={(e) => setCommissionPerLot(parseFloat(e.target.value) || 0)}
+          className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-slate-100 focus:outline-none focus:border-blue-500"
+        />
       </div>
 
       {/* Toggles */}
