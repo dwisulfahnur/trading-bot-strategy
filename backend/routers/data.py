@@ -25,10 +25,52 @@ VALID_TIMEFRAMES = ["M1", "M5", "M15", "H1", "H4"]
 # Hard-coded parameter specs per strategy (extend as new strategies added)
 # ---------------------------------------------------------------------------
 STRATEGY_PARAMS: dict[str, list[dict]] = {
+    "momentum_candle": [
+        {"name": "ema_period",        "type": "int",   "default": 200,  "min": 10,  "max": 500},
+        {"name": "body_ratio_min",    "type": "float", "default": 0.70, "min": 0.5, "max": 0.95, "step": 0.01},
+        {"name": "volume_factor",     "type": "float", "default": 1.5,  "min": 1.0, "max": 5.0,  "step": 0.1},
+        {"name": "volume_lookback",   "type": "int",   "default": 23,   "min": 5,   "max": 100},
+        {"name": "retracement_pct",   "type": "float", "default": 0.50, "min": 0.1, "max": 0.9,  "step": 0.05},
+        {"name": "sl_mult",           "type": "float", "default": 1.0,  "min": 0.5, "max": 3.0,  "step": 0.1},
+        {"name": "tp_mult",           "type": "float", "default": 1.0,  "min": 0.5, "max": 3.0,  "step": 0.1},
+        {"name": "max_pending_bars",  "type": "int",   "default": 5,    "min": 1,   "max": 20},
+        {"name": "sessions",          "type": "str",   "default": "all",
+         "options": ["all", "asia", "london", "newyork",
+                     "asia_london", "london_newyork", "asia_newyork",
+                     "asia_london_newyork"]},
+        # Sideways / ranging filter
+        {"name": "sideways_filter",   "type": "str",   "default": "none",
+         "options": ["none", "adx", "ema_slope", "choppiness", "alligator", "stochrsi"]},
+        {"name": "adx_period",        "type": "int",   "default": 14,    "min": 5,    "max": 50},
+        {"name": "adx_threshold",     "type": "float", "default": 25.0,  "min": 10.0, "max": 50.0, "step": 1.0},
+        {"name": "ema_slope_period",  "type": "int",   "default": 10,    "min": 2,    "max": 50},
+        {"name": "ema_slope_min",     "type": "float", "default": 0.5,   "min": 0.1,  "max": 10.0, "step": 0.1},
+        {"name": "choppiness_period", "type": "int",   "default": 14,    "min": 5,    "max": 50},
+        {"name": "choppiness_max",    "type": "float", "default": 61.8,  "min": 50.0, "max": 80.0, "step": 0.1},
+        # Alligator sub-params
+        {"name": "alligator_jaw",     "type": "int",   "default": 13,    "min": 5,    "max": 50},
+        {"name": "alligator_teeth",   "type": "int",   "default": 8,     "min": 3,    "max": 30},
+        {"name": "alligator_lips",    "type": "int",   "default": 5,     "min": 2,    "max": 20},
+        # StochRSI sub-params
+        {"name": "stochrsi_rsi_period",   "type": "int",   "default": 14,   "min": 5,    "max": 50},
+        {"name": "stochrsi_stoch_period", "type": "int",   "default": 14,   "min": 3,    "max": 50},
+        {"name": "stochrsi_oversold",     "type": "float", "default": 20.0, "min": 5.0,  "max": 40.0, "step": 1.0},
+        {"name": "stochrsi_overbought",   "type": "float", "default": 80.0, "min": 60.0, "max": 95.0, "step": 1.0},
+    ],
     "william_fractals": [
         {"name": "ema_period",        "type": "int",   "default": 200,   "min": 10,   "max": 500},
         {"name": "fractal_n",         "type": "int",   "default": 9,     "min": 2,    "max": 20},
         {"name": "rr_ratio",          "type": "float", "default": 1.5,   "min": 0.5,  "max": 5.0,  "step": 0.1},
+        # Market session filter
+        {"name": "sessions",          "type": "str",   "default": "all",
+         "options": ["all", "asia", "london", "newyork",
+                     "asia_london", "london_newyork", "asia_newyork",
+                     "asia_london_newyork"]},
+        # Momentum candle filter
+        {"name": "momentum_candle_filter", "type": "bool",  "default": False},
+        {"name": "mc_body_ratio_min",      "type": "float", "default": 0.6,  "min": 0.3, "max": 0.95, "step": 0.05},
+        {"name": "mc_volume_factor",       "type": "float", "default": 1.5,  "min": 1.0, "max": 5.0,  "step": 0.1},
+        {"name": "mc_volume_lookback",     "type": "int",   "default": 20,   "min": 5,   "max": 100},
         # Sideways / ranging filter
         {"name": "sideways_filter",   "type": "str",   "default": "none",
          "options": ["none", "adx", "ema_slope", "choppiness", "alligator", "stochrsi"]},
@@ -52,6 +94,7 @@ STRATEGY_PARAMS: dict[str, list[dict]] = {
 
 DISPLAY_NAMES: dict[str, str] = {
     "william_fractals": "William Fractal Breakout",
+    "momentum_candle":  "Momentum Candle",
 }
 
 

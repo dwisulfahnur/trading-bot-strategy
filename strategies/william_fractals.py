@@ -24,8 +24,6 @@ sideways_filter = "stochrsi"    → skip signals when StochRSI is not in the ext
                                     sells only when StochRSI > overbought)
 """
 
-import math
-
 import polars as pl
 
 from strategies.base import BaseStrategy
@@ -39,6 +37,13 @@ class WilliamFractalsStrategy(BaseStrategy):
         ema_period: int = 200,
         fractal_n: int = 9,
         rr_ratio: float = 1.5,
+        # Market session filter
+        sessions: str = "all",
+        # Momentum candle filter
+        momentum_candle_filter: bool = False,
+        mc_body_ratio_min: float = 0.6,
+        mc_volume_factor: float = 1.5,
+        mc_volume_lookback: int = 20,
         # Sideways filter
         sideways_filter: str = "none",
         # ADX params
@@ -63,6 +68,11 @@ class WilliamFractalsStrategy(BaseStrategy):
         self.ema_period = ema_period
         self.fractal_n = fractal_n
         self.rr_ratio = rr_ratio
+        self.sessions = sessions
+        self.momentum_candle_filter = momentum_candle_filter
+        self.mc_body_ratio_min = mc_body_ratio_min
+        self.mc_volume_factor = mc_volume_factor
+        self.mc_volume_lookback = mc_volume_lookback
         self.sideways_filter = sideways_filter
         self.adx_period = adx_period
         self.adx_threshold = adx_threshold
@@ -101,219 +111,16 @@ class WilliamFractalsStrategy(BaseStrategy):
         # Add _trend_ok_long / _trend_ok_short columns based on selected filter
         df = self._add_sideways_filter(df)
 
+        # Add _mc_ok_long / _mc_ok_short for the momentum candle filter
+        df = self._add_momentum_candle_filter(df)
+
         df = (
             df
             .with_columns(self._signals())
-            .drop(["_fractal_top", "_fractal_bot", "_trend_ok_long", "_trend_ok_short"])
+            .drop(["_fractal_top", "_fractal_bot", "_trend_ok_long", "_trend_ok_short",
+                   "_mc_ok_long", "_mc_ok_short"])
         )
-        return df
-
-    # ------------------------------------------------------------------
-    # Sideways filter dispatcher
-    # Adds two boolean columns:
-    #   _trend_ok_long  — True = long signal allowed
-    #   _trend_ok_short — True = short signal allowed
-    # Direction-agnostic filters set both columns to the same value.
-    # Direction-aware filters (alligator, stochrsi) set them independently.
-    # ------------------------------------------------------------------
-
-    def _add_sideways_filter(self, df: pl.DataFrame) -> pl.DataFrame:
-        f = self.sideways_filter
-
-        if f == "adx":
-            return self._filter_adx(df)
-        elif f == "ema_slope":
-            return self._filter_ema_slope(df)
-        elif f == "choppiness":
-            return self._filter_choppiness(df)
-        elif f == "alligator":
-            return self._filter_alligator(df)
-        elif f == "stochrsi":
-            return self._filter_stochrsi(df)
-        else:
-            # "none" or unrecognised → always allow
-            return df.with_columns([
-                pl.lit(True).alias("_trend_ok_long"),
-                pl.lit(True).alias("_trend_ok_short"),
-            ])
-
-    def _filter_adx(self, df: pl.DataFrame) -> pl.DataFrame:
-        """
-        ADX (Average Directional Index) — Wilder's method.
-        Market is trending when ADX >= adx_threshold.
-        """
-        alpha = 1.0 / self.adx_period
-
-        df = df.with_columns([
-            pl.max_horizontal(
-                pl.col("high") - pl.col("low"),
-                (pl.col("high") - pl.col("close").shift(1)).abs(),
-                (pl.col("low")  - pl.col("close").shift(1)).abs(),
-            ).alias("_tr"),
-            pl.when(
-                (pl.col("high") - pl.col("high").shift(1) > pl.col("low").shift(1) - pl.col("low")) &
-                (pl.col("high") - pl.col("high").shift(1) > 0)
-            ).then(pl.col("high") - pl.col("high").shift(1)).otherwise(0.0).alias("_plus_dm"),
-            pl.when(
-                (pl.col("low").shift(1) - pl.col("low") > pl.col("high") - pl.col("high").shift(1)) &
-                (pl.col("low").shift(1) - pl.col("low") > 0)
-            ).then(pl.col("low").shift(1) - pl.col("low")).otherwise(0.0).alias("_minus_dm"),
-        ])
-
-        df = df.with_columns([
-            pl.col("_tr").ewm_mean(alpha=alpha, adjust=False).alias("_atr_s"),
-            pl.col("_plus_dm").ewm_mean(alpha=alpha, adjust=False).alias("_plus_dm_s"),
-            pl.col("_minus_dm").ewm_mean(alpha=alpha, adjust=False).alias("_minus_dm_s"),
-        ])
-
-        df = df.with_columns([
-            (100 * pl.col("_plus_dm_s")  / (pl.col("_atr_s") + 1e-10)).alias("_plus_di"),
-            (100 * pl.col("_minus_dm_s") / (pl.col("_atr_s") + 1e-10)).alias("_minus_di"),
-        ])
-
-        df = df.with_columns([
-            (100 * (pl.col("_plus_di") - pl.col("_minus_di")).abs() /
-             (pl.col("_plus_di") + pl.col("_minus_di") + 1e-10)).alias("_dx"),
-        ])
-
-        df = df.with_columns([
-            pl.col("_dx").ewm_mean(alpha=alpha, adjust=False).alias("_adx"),
-        ])
-
-        is_trending = pl.col("_adx") >= self.adx_threshold
-        df = df.with_columns([
-            is_trending.alias("_trend_ok_long"),
-            is_trending.alias("_trend_ok_short"),
-        ])
-
-        return df.drop(["_tr", "_plus_dm", "_minus_dm", "_atr_s",
-                         "_plus_dm_s", "_minus_dm_s", "_plus_di", "_minus_di", "_dx", "_adx"])
-
-    def _filter_ema_slope(self, df: pl.DataFrame) -> pl.DataFrame:
-        """
-        EMA Slope — measures how steeply the trend EMA is rising/falling.
-        slope = (ema[i] - ema[i - period]) / period  (price per bar)
-        Market is trending when |slope| >= ema_slope_min.
-        """
-        period = self.ema_slope_period
-        slope = (pl.col("ema") - pl.col("ema").shift(period)) / period
-        is_trending = slope.abs() >= self.ema_slope_min
-        return df.with_columns([
-            is_trending.alias("_trend_ok_long"),
-            is_trending.alias("_trend_ok_short"),
-        ])
-
-    def _filter_choppiness(self, df: pl.DataFrame) -> pl.DataFrame:
-        """
-        Choppiness Index (CI).
-        CI = 100 × log10(Σ ATR(1) over N) / (Highest High(N) - Lowest Low(N)) / log10(N)
-        Range: 0–100.  CI < 38.2 = strongly trending,  CI > 61.8 = ranging.
-        Market is trending when CI < choppiness_max.
-        """
-        period = self.choppiness_period
-        log_n = math.log10(period)
-
-        df = df.with_columns([
-            pl.max_horizontal(
-                pl.col("high") - pl.col("low"),
-                (pl.col("high") - pl.col("close").shift(1)).abs(),
-                (pl.col("low")  - pl.col("close").shift(1)).abs(),
-            ).alias("_tr"),
-        ])
-
-        df = df.with_columns([
-            pl.col("_tr").rolling_sum(window_size=period).alias("_tr_sum"),
-            pl.col("high").rolling_max(window_size=period).alias("_hh"),
-            pl.col("low").rolling_min(window_size=period).alias("_ll"),
-        ])
-
-        df = df.with_columns([
-            (100.0 * (pl.col("_tr_sum") / (pl.col("_hh") - pl.col("_ll") + 1e-10)).log(10) / log_n
-             ).alias("_ci"),
-        ])
-
-        is_trending = pl.col("_ci") < self.choppiness_max
-        df = df.with_columns([
-            is_trending.alias("_trend_ok_long"),
-            is_trending.alias("_trend_ok_short"),
-        ])
-
-        return df.drop(["_tr", "_tr_sum", "_hh", "_ll", "_ci"])
-
-    def _filter_alligator(self, df: pl.DataFrame) -> pl.DataFrame:
-        """
-        Williams Alligator — three SMAs (Smoothed Moving Averages).
-          Jaw   : SMMA(alligator_jaw)   — slowest
-          Teeth : SMMA(alligator_teeth) — medium
-          Lips  : SMMA(alligator_lips)  — fastest
-
-        Trending up   : lips > teeth > jaw  → long signals allowed
-        Trending down : jaw  > teeth > lips → short signals allowed
-        Sideways      : lines tangled/crossing → both blocked
-        """
-        jaw_alpha   = 1.0 / self.alligator_jaw
-        teeth_alpha = 1.0 / self.alligator_teeth
-        lips_alpha  = 1.0 / self.alligator_lips
-
-        df = df.with_columns([
-            pl.col("close").ewm_mean(alpha=jaw_alpha,   adjust=False).alias("_jaw"),
-            pl.col("close").ewm_mean(alpha=teeth_alpha, adjust=False).alias("_teeth"),
-            pl.col("close").ewm_mean(alpha=lips_alpha,  adjust=False).alias("_lips"),
-        ])
-
-        df = df.with_columns([
-            # Uptrend alignment: lips > teeth > jaw
-            ((pl.col("_lips") > pl.col("_teeth")) & (pl.col("_teeth") > pl.col("_jaw")))
-            .alias("_trend_ok_long"),
-            # Downtrend alignment: jaw > teeth > lips
-            ((pl.col("_jaw") > pl.col("_teeth")) & (pl.col("_teeth") > pl.col("_lips")))
-            .alias("_trend_ok_short"),
-        ])
-
-        return df.drop(["_jaw", "_teeth", "_lips"])
-
-    def _filter_stochrsi(self, df: pl.DataFrame) -> pl.DataFrame:
-        """
-        Stochastic RSI — Stochastic oscillator applied to RSI values.
-          StochRSI = 100 × (RSI - lowest RSI over N) / (highest RSI - lowest RSI over N)
-
-        Long  signals allowed when StochRSI < stochrsi_oversold  (pullback oversold)
-        Short signals allowed when StochRSI > stochrsi_overbought (pullback overbought)
-        """
-        rsi_alpha = 1.0 / self.stochrsi_rsi_period
-        stoch_n   = self.stochrsi_stoch_period
-
-        delta = pl.col("close") - pl.col("close").shift(1)
-        gain  = pl.when(delta > 0).then(delta).otherwise(0.0)
-        loss  = pl.when(delta < 0).then(-delta).otherwise(0.0)
-
-        df = df.with_columns([
-            gain.ewm_mean(alpha=rsi_alpha, adjust=False).alias("_avg_gain"),
-            loss.ewm_mean(alpha=rsi_alpha, adjust=False).alias("_avg_loss"),
-        ])
-
-        df = df.with_columns([
-            (100.0 - 100.0 / (1.0 + pl.col("_avg_gain") / (pl.col("_avg_loss") + 1e-10)))
-            .alias("_rsi"),
-        ])
-
-        df = df.with_columns([
-            pl.col("_rsi").rolling_min(window_size=stoch_n).alias("_rsi_low"),
-            pl.col("_rsi").rolling_max(window_size=stoch_n).alias("_rsi_high"),
-        ])
-
-        df = df.with_columns([
-            (100.0 * (pl.col("_rsi") - pl.col("_rsi_low")) /
-             (pl.col("_rsi_high") - pl.col("_rsi_low") + 1e-10))
-            .alias("_stochrsi"),
-        ])
-
-        df = df.with_columns([
-            (pl.col("_stochrsi") < self.stochrsi_oversold).alias("_trend_ok_long"),
-            (pl.col("_stochrsi") > self.stochrsi_overbought).alias("_trend_ok_short"),
-        ])
-
-        return df.drop(["_avg_gain", "_avg_loss", "_rsi", "_rsi_low", "_rsi_high", "_stochrsi"])
+        return self._apply_session_filter(df, self.sessions)
 
     # ------------------------------------------------------------------
     # Private helpers
@@ -361,10 +168,12 @@ class WilliamFractalsStrategy(BaseStrategy):
         )
 
         buy_cond  = (
-            in_uptrend & buy_breakout & pl.col("last_top").is_not_null() & pl.col("_trend_ok_long")
+            in_uptrend & buy_breakout & pl.col("last_top").is_not_null()
+            & pl.col("_trend_ok_long") & pl.col("_mc_ok_long")
         )
         sell_cond = (
-            in_downtrend & sell_breakout & pl.col("last_bot").is_not_null() & pl.col("_trend_ok_short")
+            in_downtrend & sell_breakout & pl.col("last_bot").is_not_null()
+            & pl.col("_trend_ok_short") & pl.col("_mc_ok_short")
         )
 
         signal = (
@@ -395,3 +204,33 @@ class WilliamFractalsStrategy(BaseStrategy):
         )
 
         return [signal, sl, tp]
+
+    def _add_momentum_candle_filter(self, df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Momentum candle filter: only allow entry on bars where the signal candle
+        qualifies as a momentum candle — a strongly directional bar with a volume spike.
+
+        Long  allowed: close > open (bullish), body ratio >= mc_body_ratio_min,
+                       ticks > mc_volume_factor × rolling avg of prior mc_volume_lookback bars
+        Short allowed: close < open (bearish), same body/volume conditions
+        """
+        if not self.momentum_candle_filter:
+            return df.with_columns([
+                pl.lit(True).alias("_mc_ok_long"),
+                pl.lit(True).alias("_mc_ok_short"),
+            ])
+
+        n = self.mc_volume_lookback
+        avg_ticks = pl.col("ticks").shift(1).rolling_mean(window_size=n)
+
+        body = (pl.col("close") - pl.col("open")).abs()
+        candle_range = pl.col("high") - pl.col("low")
+        body_ratio = body / (candle_range + 1e-10)
+
+        is_strong_body = body_ratio >= self.mc_body_ratio_min
+        has_volume_spike = pl.col("ticks") > self.mc_volume_factor * avg_ticks
+
+        return df.with_columns([
+            ((pl.col("close") > pl.col("open")) & is_strong_body & has_volume_spike).alias("_mc_ok_long"),
+            ((pl.col("close") < pl.col("open")) & is_strong_body & has_volume_spike).alias("_mc_ok_short"),
+        ])

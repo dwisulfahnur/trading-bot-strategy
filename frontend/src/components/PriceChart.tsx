@@ -170,16 +170,6 @@ export function PriceChart({ bars, trades, highlightedTrade, onTradeClick, heigh
     markersPluginRef.current = createSeriesMarkers(candleSeriesRef.current, markers);
   }, [trades, bars, highlightedTrade]);
 
-  // Scroll to highlighted trade
-  useEffect(() => {
-    if (highlightedTrade === null || !chartRef.current || trades.length === 0) return;
-    const trade = trades[highlightedTrade];
-    if (!trade) return;
-    chartRef.current.timeScale().setVisibleRange({
-      from: toTime(trade.entry_time),
-      to: toTime(trade.exit_time),
-    });
-  }, [highlightedTrade, trades]);
 
   const handleContainerClick = useCallback(
     (e: React.MouseEvent<HTMLDivElement>) => {
