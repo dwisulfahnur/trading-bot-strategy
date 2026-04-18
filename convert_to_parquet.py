@@ -84,6 +84,11 @@ def find_source(year: int) -> tuple[Path, str]:
     raise FileNotFoundError(f"No CSV or ZIP found for year {year} in {DATA_DIR}")
 
 
+def find_monthly_sources(year: int) -> list[Path]:
+    """Return sorted list of monthly zip files like Exness_XAUUSD_Raw_Spread_2025_07.zip."""
+    return sorted(DATA_DIR.glob(f"Exness_XAUUSD_Raw_Spread_{year}_??.zip"))
+
+
 def find_mt5_exports() -> list[Path]:
     """Return all MT5-format tick CSVs matching XAUUSD_*.csv in DATA_DIR."""
     return sorted(DATA_DIR.glob("XAUUSD_*.csv"))
@@ -179,6 +184,44 @@ def build_tick_parquet_from_mt5(exports: list[Path]) -> dict[int, Path]:
 # ---------------------------------------------------------------------------
 # Conversion
 # ---------------------------------------------------------------------------
+
+def merge_monthly_ticks(year: int, monthly_zips: list[Path]) -> tuple[Path, bool]:
+    """
+    Read monthly Exness zip files, merge with existing tick Parquet (if any),
+    deduplicate by timestamp, and write the result.
+
+    Returns (out_path, was_updated) — was_updated is True if new rows were added.
+    """
+    out_path = TICKS_DIR / f"XAUUSD_ticks_{year}.parquet"
+
+    print(f"  Merging {len(monthly_zips)} monthly zip(s) into {out_path.name} ...")
+    frames: list[pl.DataFrame] = []
+
+    if out_path.exists():
+        frames.append(pl.read_parquet(out_path))
+        existing_max = frames[0]["timestamp"].max()
+        print(f"    Existing data up to: {existing_max}")
+
+    for zp in monthly_zips:
+        print(f"    Reading {zp.name} ({fmt_size(zp)}) ...")
+        t0 = time.time()
+        df = read_ticks(zp, "zip").collect()
+        print(f"      {len(df):,} ticks  [{fmt_elapsed(time.time() - t0)}]")
+        frames.append(df)
+
+    combined = (
+        pl.concat(frames)
+        .sort("timestamp")
+        .unique(subset=["timestamp"], keep="first")
+    )
+
+    before = len(frames[0]) if out_path.exists() else 0
+    added = len(combined) - before
+    print(f"    Total: {len(combined):,} ticks ({added:+,} new) → {out_path.name}")
+
+    combined.write_parquet(out_path, compression="zstd", compression_level=3)
+    return out_path, added > 0
+
 
 def convert_ticks(year: int) -> Path:
     """Convert raw source to tick-level Parquet. Returns output path."""
@@ -278,15 +321,30 @@ def main():
         print(f"  Year {year}")
         print(f"{'='*60}")
 
+        # Check for monthly zip supplements (e.g. 2025_07.zip … 2025_12.zip)
+        monthly_zips = find_monthly_sources(year)
+
         try:
-            tick_parquet = convert_ticks(year)
+            if monthly_zips:
+                tick_parquet, updated = merge_monthly_ticks(year, monthly_zips)
+                if not updated:
+                    print(f"  [skip] no new ticks found in monthly zips — OHLCV unchanged")
+                    continue
+                # Rebuild OHLCV since tick data changed
+                print(f"  Rebuilding OHLCV bars ...")
+                for tf_label, tf_truncate in TIMEFRAMES.items():
+                    stale = OHLCV_DIR / tf_label / f"XAUUSD_{tf_label}_{year}.parquet"
+                    if stale.exists():
+                        stale.unlink()
+                    build_ohlcv(year, tick_parquet, tf_label, tf_truncate)
+            else:
+                tick_parquet = convert_ticks(year)
+                print(f"  Aggregating OHLCV bars ...")
+                for tf_label, tf_truncate in TIMEFRAMES.items():
+                    build_ohlcv(year, tick_parquet, tf_label, tf_truncate)
         except FileNotFoundError as e:
             print(f"  [WARN] {e}")
             continue
-
-        print(f"  Aggregating OHLCV bars ...")
-        for tf_label, tf_truncate in TIMEFRAMES.items():
-            build_ohlcv(year, tick_parquet, tf_label, tf_truncate)
 
     print(f"\nDone in {fmt_elapsed(time.time() - total_start)}.")
     print(f"\nOutput layout:")

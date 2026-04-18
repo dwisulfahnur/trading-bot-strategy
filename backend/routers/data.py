@@ -90,11 +90,29 @@ STRATEGY_PARAMS: dict[str, list[dict]] = {
         {"name": "stochrsi_oversold",     "type": "float", "default": 20.0, "min": 5.0,  "max": 40.0, "step": 1.0},
         {"name": "stochrsi_overbought",   "type": "float", "default": 80.0, "min": 60.0, "max": 95.0, "step": 1.0},
     ],
+    "order_block_smc": [
+        # ── Structure & OB detection ───────────────────────────────────────
+        {"name": "structure_period", "type": "int",   "default": 20,   "min": 5,   "max": 100},
+        {"name": "ob_lookback",      "type": "int",   "default": 5,    "min": 1,   "max": 20},
+        # ── Entry & Exit ───────────────────────────────────────────────────
+        {"name": "rr_ratio",         "type": "float", "default": 2.0,  "min": 0.5, "max": 5.0, "step": 0.1},
+        # ── Optional filters ───────────────────────────────────────────────
+        {"name": "require_fvg",  "type": "bool", "default": False},
+        {"name": "require_ote",  "type": "bool", "default": False},
+        {"name": "ote_fib_low",  "type": "float", "default": 0.618, "min": 0.382, "max": 0.786, "step": 0.001},
+        {"name": "ote_fib_high", "type": "float", "default": 0.786, "min": 0.500, "max": 0.886, "step": 0.001},
+        # ── Session filter ─────────────────────────────────────────────────
+        {"name": "sessions", "type": "str", "default": "all",
+         "options": ["all", "asia", "london", "newyork",
+                     "asia_london", "london_newyork", "asia_newyork",
+                     "asia_london_newyork"]},
+    ],
 }
 
 DISPLAY_NAMES: dict[str, str] = {
-    "william_fractals": "William Fractal Breakout",
-    "momentum_candle":  "Momentum Candle",
+    "william_fractals":      "William Fractal Breakout",
+    "momentum_candle":       "Momentum Candle",
+    "order_block_smc":       "Order Block (SMC)",
 }
 
 

@@ -175,6 +175,38 @@ const PARAM_META: Record<string, ParamInfo> = {
     description:
       'Only generate signals when the bar falls inside the selected market sessions (UTC times). Use to focus trading on the most liquid hours.',
   },
+
+  // Order Block (SMC)
+  structure_period: {
+    label: 'Structure Period',
+    description:
+      'Rolling lookback (bars) used to define the high/low that price must break to trigger a BOS. e.g. 20 = the close must exceed the highest high of the prior 20 bars. Higher values require a larger, more significant breakout to signal.',
+  },
+  ob_lookback: {
+    label: 'OB Lookback',
+    description:
+      'How many bars before the BOS to search for the Order Block candle. The OB is the last opposing candle (bearish for longs, bullish for shorts) within this window. If no qualifying candle is found, no signal is emitted.',
+  },
+  require_fvg: {
+    label: 'Require Fair Value Gap (FVG)',
+    description:
+      'A 3-candle imbalance (low[i] > high[i-2] for bullish, high[i] < low[i-2] for bearish) must be present within the OB lookback window. Confirms the impulse was aggressive enough to leave an unfilled price gap.',
+  },
+  require_ote: {
+    label: 'Require OTE (Fibonacci Zone)',
+    description:
+      'The Order Block entry level must fall within the Optimal Trade Entry zone — a Fibonacci retracement of the BOS impulse leg. Filters for OBs that sit in the 61.8%–78.6% "golden zone" of the move.',
+  },
+  ote_fib_low: {
+    label: 'OTE Lower Fibonacci',
+    description:
+      'Lower boundary of the OTE zone (e.g. 0.618 = 61.8% retracement of the impulse leg). The OB entry level must be at or above this level.',
+  },
+  ote_fib_high: {
+    label: 'OTE Upper Fibonacci',
+    description:
+      'Upper boundary of the OTE zone (e.g. 0.786 = 78.6% retracement). The OB entry level must be at or below this level. Entries beyond this are considered over-extended.',
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -213,6 +245,20 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
         'alligator_jaw', 'alligator_teeth', 'alligator_lips',
         'stochrsi_rsi_period', 'stochrsi_stoch_period', 'stochrsi_oversold', 'stochrsi_overbought',
       ],
+    },
+  ],
+  order_block_smc: [
+    {
+      title: 'Order Block Detection',
+      params: ['structure_period', 'ob_lookback'],
+    },
+    {
+      title: 'Entry & Exit',
+      params: ['rr_ratio', 'sessions'],
+    },
+    {
+      title: 'Confluence Filters',
+      params: ['require_fvg', 'require_ote', 'ote_fib_low', 'ote_fib_high'],
     },
   ],
   momentum_candle: [
@@ -583,6 +629,8 @@ export function BacktestForm({ onResult }: Props) {
           const currentFilter = (stratParams['sideways_filter'] ?? 'none') as string;
           const mcFilterOn = (stratParams['momentum_candle_filter'] ?? false) as boolean;
 
+          const requireOte = (stratParams['require_ote'] ?? false) as boolean;
+
           const isVisible = (name: string): boolean => {
             if (name.startsWith('adx_'))        return currentFilter === 'adx';
             if (name.startsWith('ema_slope_'))  return currentFilter === 'ema_slope';
@@ -590,6 +638,7 @@ export function BacktestForm({ onResult }: Props) {
             if (name.startsWith('alligator_'))  return currentFilter === 'alligator';
             if (name.startsWith('stochrsi_'))   return currentFilter === 'stochrsi';
             if (name.startsWith('mc_'))         return mcFilterOn;
+            if (name.startsWith('ote_'))        return requireOte;
             return true;
           };
 
