@@ -207,6 +207,11 @@ const PARAM_META: Record<string, ParamInfo> = {
     description:
       'Upper boundary of the OTE zone (e.g. 0.786 = 78.6% retracement). The OB entry level must be at or below this level. Entries beyond this are considered over-extended.',
   },
+  sl_mode: {
+    label: 'Stop-Loss Placement',
+    description:
+      'Where to place the stop-loss relative to the Order Block. "OB Edge" sets SL just beyond the far edge of the OB candle (full OB height as risk). "OB Midpoint" places SL at the 50% level of the OB for a tighter stop. "Structure" places SL beyond the swing low/high that defined the BOS, giving price more room but widening risk.',
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -254,7 +259,7 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
     },
     {
       title: 'Entry & Exit',
-      params: ['rr_ratio', 'sessions'],
+      params: ['rr_ratio', 'sl_mode', 'sessions'],
     },
     {
       title: 'Confluence Filters',

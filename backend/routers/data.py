@@ -96,6 +96,8 @@ STRATEGY_PARAMS: dict[str, list[dict]] = {
         {"name": "ob_lookback",      "type": "int",   "default": 5,    "min": 1,   "max": 20},
         # ── Entry & Exit ───────────────────────────────────────────────────
         {"name": "rr_ratio",         "type": "float", "default": 2.0,  "min": 0.5, "max": 5.0, "step": 0.1},
+        {"name": "sl_mode",          "type": "str",   "default": "ob_edge",
+         "options": ["ob_edge", "ob_midpoint", "structure"]},
         # ── Optional filters ───────────────────────────────────────────────
         {"name": "require_fvg",  "type": "bool", "default": False},
         {"name": "require_ote",  "type": "bool", "default": False},

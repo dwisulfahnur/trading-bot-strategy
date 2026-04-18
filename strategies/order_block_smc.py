@@ -15,8 +15,11 @@ How it works
    shorts.  The engine fills on a later bar when price retraces into the zone.
    If no OB candle is found within the lookback window, no signal is emitted.
 
-4. Stop-loss : OB low (longs) / OB high (shorts).
-5. Take-profit: entry_limit ± rr_ratio × OB height.
+4. Stop-loss placement (sl_mode):
+   - "ob_edge"     : SL at OB low (longs) / OB high (shorts)  [default]
+   - "ob_midpoint" : SL at the 50% level of the OB candle (tighter)
+   - "structure"   : SL below the BOS swing low / above BOS swing high (wider)
+5. Take-profit: entry ± rr_ratio × sl_distance  (scales with chosen SL mode)
 
 Optional filters
 ----------------
@@ -48,6 +51,7 @@ class OrderBlockSMCStrategy(BaseStrategy):
         require_ote: bool = False,     # require OB entry within OTE Fibonacci zone
         ote_fib_low: float = 0.618,    # OTE zone lower boundary (shown when require_ote=True)
         ote_fib_high: float = 0.786,   # OTE zone upper boundary (shown when require_ote=True)
+        sl_mode: str = "ob_edge",      # "ob_edge" | "ob_midpoint" | "structure"
         sessions: str = "all",
     ) -> None:
         self.structure_period = structure_period
@@ -57,6 +61,7 @@ class OrderBlockSMCStrategy(BaseStrategy):
         self.require_ote = require_ote
         self.ote_fib_low = ote_fib_low
         self.ote_fib_high = ote_fib_high
+        self.sl_mode = sl_mode
         self.sessions = sessions
 
     # ──────────────────────────────────────────────────────────────────────
@@ -185,8 +190,7 @@ class OrderBlockSMCStrategy(BaseStrategy):
         if ob_high is None:
             return None
 
-        ob_height = ob_high - ob_low
-        if ob_height <= 0:
+        if ob_high - ob_low <= 0:
             return None
 
         if self.require_fvg:
@@ -198,7 +202,13 @@ class OrderBlockSMCStrategy(BaseStrategy):
             if not self._in_ote_zone_long(ob_high, recent_low, cl[i]):
                 return None
 
-        return ob_high, ob_low, ob_high + self.rr_ratio * ob_height
+        entry = ob_high
+        sl = self._calc_sl_long(ob_high, ob_low, recent_low)
+        if sl is None or entry <= sl:
+            return None
+        sl_dist = entry - sl
+        tp = entry + self.rr_ratio * sl_dist
+        return entry, sl, tp
 
     def _eval_short(self, i, hi, lo, op, cl, fvg_bear, recent_high, recent_low):
         """
@@ -210,8 +220,7 @@ class OrderBlockSMCStrategy(BaseStrategy):
         if ob_high is None:
             return None
 
-        ob_height = ob_high - ob_low
-        if ob_height <= 0:
+        if ob_high - ob_low <= 0:
             return None
 
         if self.require_fvg:
@@ -223,7 +232,41 @@ class OrderBlockSMCStrategy(BaseStrategy):
             if not self._in_ote_zone_short(ob_low, recent_high, cl[i]):
                 return None
 
-        return ob_low, ob_high, ob_low - self.rr_ratio * ob_height
+        entry = ob_low
+        sl = self._calc_sl_short(ob_high, ob_low, recent_high)
+        if sl is None or entry >= sl:
+            return None
+        sl_dist = sl - entry
+        tp = entry - self.rr_ratio * sl_dist
+        return entry, sl, tp
+
+    # ──────────────────────────────────────────────────────────────────────
+    # SL placement helpers
+    # ──────────────────────────────────────────────────────────────────────
+
+    def _calc_sl_long(self, ob_high, ob_low, recent_low) -> float | None:
+        """Return stop-loss price for a long entry, based on sl_mode."""
+        if self.sl_mode == "ob_edge":
+            return ob_low
+        if self.sl_mode == "ob_midpoint":
+            return (ob_high + ob_low) / 2.0
+        if self.sl_mode == "structure":
+            if np.isnan(recent_low):
+                return None
+            return recent_low
+        return ob_low  # fallback
+
+    def _calc_sl_short(self, ob_high, ob_low, recent_high) -> float | None:
+        """Return stop-loss price for a short entry, based on sl_mode."""
+        if self.sl_mode == "ob_edge":
+            return ob_high
+        if self.sl_mode == "ob_midpoint":
+            return (ob_high + ob_low) / 2.0
+        if self.sl_mode == "structure":
+            if np.isnan(recent_high):
+                return None
+            return recent_high
+        return ob_high  # fallback
 
     # ──────────────────────────────────────────────────────────────────────
     # Order Block finders
