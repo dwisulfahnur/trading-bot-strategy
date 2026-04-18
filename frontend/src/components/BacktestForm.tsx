@@ -366,6 +366,9 @@ export function BacktestForm({ onResult }: Props) {
   const [compound, setCompound] = useState(false);
   const [breakevenOn, setBreakevenOn] = useState(false);
   const [breakevenR, setBreakevenR] = useState(1.0);
+  const [slLimitOn, setSlLimitOn] = useState(false);
+  const [slLimitMax, setSlLimitMax] = useState(2);
+  const [slLimitPeriod, setSlLimitPeriod] = useState<'day' | 'week' | 'month'>('day');
   const [commissionPerLot, setCommissionPerLot] = useState(3.5);
   const [stratParams, setStratParams] = useState<Record<string, number | string | boolean>>({});
   const [loading, setLoading] = useState(false);
@@ -429,6 +432,8 @@ export function BacktestForm({ onResult }: Props) {
         compound,
         breakeven_r: breakevenOn ? breakevenR : null,
         commission_per_lot: commissionPerLot,
+        max_sl_per_period: slLimitOn ? slLimitMax : null,
+        sl_period: slLimitOn ? slLimitPeriod : 'none',
         params: stratParams,
       };
       const job = await api.runBacktest(req);
@@ -582,6 +587,60 @@ export function BacktestForm({ onResult }: Props) {
             )}
           </span>
           <InfoTooltip text="ON: lot size recalculated from current balance each trade (risk compounds). OFF: lot size uses the fixed initial capital throughout." />
+        </div>
+
+        {/* Period SL Limit */}
+        <div className="flex items-start gap-3 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setSlLimitOn((v) => !v)}
+            className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 mt-0.5 ${
+              slLimitOn ? 'bg-amber-500' : 'bg-slate-600'
+            }`}
+          >
+            <span
+              className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                slLimitOn ? 'translate-x-5' : ''
+              }`}
+            />
+          </button>
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-slate-300 flex-shrink-0">
+                Period SL Limit
+              </span>
+              <InfoTooltip text="Stop taking new trades for the rest of the period (day / week / month) once this many stop-losses have been hit. Resets automatically at the start of each new period." />
+            </div>
+            {slLimitOn && (
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-slate-500">Max</span>
+                <input
+                  type="number"
+                  value={slLimitMax}
+                  min={1}
+                  max={20}
+                  step={1}
+                  onChange={(e) => setSlLimitMax(Math.max(1, parseInt(e.target.value) || 1))}
+                  className="w-16 bg-slate-800 border border-amber-500 rounded px-2 py-1 text-sm text-center text-amber-300"
+                />
+                <span className="text-xs text-slate-500">SLs per</span>
+                {(['day', 'week', 'month'] as const).map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setSlLimitPeriod(p)}
+                    className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                      slLimitPeriod === p
+                        ? 'bg-amber-500 text-white'
+                        : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
+                    }`}
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Breakeven */}

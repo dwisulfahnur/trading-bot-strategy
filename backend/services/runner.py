@@ -42,6 +42,8 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
         compound = request_data["compound"]
         breakeven_r = request_data.get("breakeven_r", None)
         commission_per_lot = request_data.get("commission_per_lot", 3.5)
+        max_sl_per_period = request_data.get("max_sl_per_period", None)
+        sl_period = request_data.get("sl_period", "none")
         params = request_data.get("params", {})
 
         # Prepend the previous year as EMA warmup so indicator values match
@@ -63,7 +65,14 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
         )
 
         max_pending_bars = int(params.get("max_pending_bars", 5)) if strategy_name == "momentum_candle" else None
-        trades = simulate(df, tick_data=tick_data, breakeven_r=breakeven_r, max_pending_bars=max_pending_bars)
+        trades = simulate(
+            df,
+            tick_data=tick_data,
+            breakeven_r=breakeven_r,
+            max_pending_bars=max_pending_bars,
+            max_sl_per_period=max_sl_per_period,
+            sl_period=sl_period,
+        )
 
         metrics = compute_metrics(trades, initial_capital, risk_pct, compound=compound, commission_per_lot=commission_per_lot)
         metrics["compound"] = compound
@@ -73,6 +82,8 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
         params_with_sim = {
             **params,
             "breakeven_r": breakeven_r,
+            "max_sl_per_period": max_sl_per_period,
+            "sl_period": sl_period,
         }
         out_path = save_result(metrics, strategy_name, params_with_sim, timeframe, years)
         result_id = out_path.stem

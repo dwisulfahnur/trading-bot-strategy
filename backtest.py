@@ -121,6 +121,22 @@ def load_strategy(name: str, params: dict) -> BaseStrategy:
 
 
 # ---------------------------------------------------------------------------
+# Period SL-limit helper
+# ---------------------------------------------------------------------------
+
+def _get_period_key(t, sl_period: str) -> str | None:
+    """Return a hashable key for the calendar period that `t` falls in."""
+    if sl_period == "day":
+        return f"{t.year}-{t.month:02d}-{t.day:02d}"
+    if sl_period == "week":
+        iso = t.isocalendar()
+        return f"{iso[0]}-W{iso[1]:02d}"
+    if sl_period == "month":
+        return f"{t.year}-{t.month:02d}"
+    return None
+
+
+# ---------------------------------------------------------------------------
 # Tick-resolution helpers
 # ---------------------------------------------------------------------------
 
@@ -197,6 +213,8 @@ def simulate(
     tick_data: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
     breakeven_r: float | None = None,
     max_pending_bars: int | None = None,
+    max_sl_per_period: int | None = None,
+    sl_period: str = "none",
 ) -> list[Trade]:
     """
     Bar-by-bar simulation with optional tick-level execution.
@@ -225,6 +243,11 @@ def simulate(
     last_top_used: float | None = None
     last_bot_used: float | None = None
 
+    # Period SL-limit state
+    _sl_limit_active   = max_sl_per_period is not None and sl_period != "none"
+    _period_sl_count:  int       = 0
+    _current_period_key: str | None = None
+
     # Prepare tick arrays for O(log N) per-bar lookup
     _use_ticks = tick_data is not None
     if _use_ticks:
@@ -250,6 +273,18 @@ def simulate(
         # ----------------------------------------------------------------
         # Open a pending trade at this bar
         # ----------------------------------------------------------------
+        if pending is not None and position is None:
+            # Block entry for the rest of the period if SL limit is reached
+            if _sl_limit_active:
+                pk = _get_period_key(bar["time"], sl_period)
+                if pk != _current_period_key:
+                    _current_period_key = pk
+                    _period_sl_count = 0
+                if _period_sl_count >= max_sl_per_period:
+                    pending = None
+                    pending_bars = 0
+                    cancelled_this_bar = True
+
         if pending is not None and position is None:
             limit_price = pending.get("entry_limit")
 
@@ -395,6 +430,12 @@ def simulate(
                     position.exit_price  = position.sl
                     position.exit_reason = "sl"
                     position.pnl_r       = -1.0
+                    if _sl_limit_active:
+                        pk = _get_period_key(bar["time"], sl_period)
+                        if pk != _current_period_key:
+                            _current_period_key = pk
+                            _period_sl_count = 0
+                        _period_sl_count += 1
                 trades.append(position)
                 position = None
 

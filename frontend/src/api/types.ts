@@ -28,6 +28,8 @@ export interface BacktestRequest {
   compound: boolean;
   breakeven_r: number | null;
   commission_per_lot: number;
+  max_sl_per_period: number | null;
+  sl_period: string;
   params: Record<string, number | boolean | string>;
 }
 

@@ -18,6 +18,8 @@ class BacktestRequest(BaseModel):
     compound: bool = False
     breakeven_r: float | None = None
     commission_per_lot: float = Field(default=3.5, ge=0)
+    max_sl_per_period: int | None = None
+    sl_period: str = "none"
     params: dict[str, Any] = Field(default_factory=dict)
 
 
