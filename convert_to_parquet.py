@@ -48,6 +48,11 @@ CSV_SCHEMA = {
     "Ask": pl.Float64,
 }
 
+MT5_SCHEMA = {
+    "<BID>": pl.Float64,
+    "<ASK>": pl.Float64,
+}
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -79,8 +84,13 @@ def find_source(year: int) -> tuple[Path, str]:
     raise FileNotFoundError(f"No CSV or ZIP found for year {year} in {DATA_DIR}")
 
 
+def find_mt5_exports() -> list[Path]:
+    """Return all MT5-format tick CSVs matching XAUUSD_*.csv in DATA_DIR."""
+    return sorted(DATA_DIR.glob("XAUUSD_*.csv"))
+
+
 def read_ticks(source: Path, kind: str) -> pl.LazyFrame:
-    """Return a LazyFrame of cleaned tick data from CSV or ZIP source."""
+    """Return a LazyFrame of cleaned tick data from Exness CSV or ZIP source."""
     if kind == "csv":
         lf = pl.scan_csv(source, schema_overrides=CSV_SCHEMA)
     else:
@@ -100,6 +110,70 @@ def read_ticks(source: Path, kind: str) -> pl.LazyFrame:
             .str.to_datetime("%Y-%m-%d %H:%M:%S%.3fZ", time_unit="ms", time_zone="UTC")
         )
     )
+
+
+def read_mt5_ticks(source: Path) -> pl.DataFrame:
+    """
+    Read an MT5 History Center tick export.
+
+    Expected format (tab-separated):
+        <DATE>\\t<TIME>\\t<BID>\\t<ASK>\\t<LAST>\\t<VOLUME>\\t<FLAGS>
+        2026.04.02\\t00:00:00.248\\t4784.332\\t4784.429\\t\\t\\t6
+    """
+    df = pl.read_csv(
+        source,
+        separator="\t",
+        schema_overrides=MT5_SCHEMA,
+        null_values=[""],
+    )
+    return (
+        df
+        .select(["<DATE>", "<TIME>", "<BID>", "<ASK>"])
+        .rename({"<BID>": "bid", "<ASK>": "ask"})
+        .with_columns(
+            (pl.col("<DATE>") + pl.lit(" ") + pl.col("<TIME>"))
+            .str.to_datetime("%Y.%m.%d %H:%M:%S%.3f", time_unit="ms")
+            .dt.replace_time_zone("UTC")
+            .alias("timestamp")
+        )
+        .select(["timestamp", "bid", "ask"])
+    )
+
+
+def build_tick_parquet_from_mt5(exports: list[Path]) -> dict[int, Path]:
+    """
+    Merge one or more MT5 tick export files, split by year, and write tick
+    Parquets.  Existing tick Parquets for a year are merged with new data
+    (duplicates removed by timestamp).  Returns {year: parquet_path}.
+    """
+    print(f"\n  Reading {len(exports)} MT5 export file(s) ...")
+    frames = [read_mt5_ticks(p) for p in exports]
+    combined = pl.concat(frames).sort("timestamp").unique(subset=["timestamp"], keep="first")
+
+    years = combined.with_columns(pl.col("timestamp").dt.year().alias("_year"))["_year"].unique().to_list()
+
+    TICKS_DIR.mkdir(parents=True, exist_ok=True)
+    result: dict[int, Path] = {}
+
+    for year in sorted(years):
+        out_path = TICKS_DIR / f"XAUUSD_ticks_{year}.parquet"
+        year_df = combined.filter(pl.col("timestamp").dt.year() == year)
+
+        if out_path.exists():
+            existing = pl.read_parquet(out_path)
+            year_df = (
+                pl.concat([existing, year_df])
+                .sort("timestamp")
+                .unique(subset=["timestamp"], keep="first")
+            )
+            print(f"    Merged year {year}: {len(year_df):,} ticks → {out_path.name}")
+        else:
+            print(f"    Created year {year}: {len(year_df):,} ticks → {out_path.name}")
+
+        year_df.write_parquet(out_path, compression="zstd", compression_level=3)
+        result[year] = out_path
+
+    return result
 
 
 # ---------------------------------------------------------------------------
@@ -172,7 +246,34 @@ def main():
 
     total_start = time.time()
 
+    # ------------------------------------------------------------------
+    # Phase 1: ingest any MT5 History Center exports (XAUUSD_*.csv)
+    # ------------------------------------------------------------------
+    mt5_exports = find_mt5_exports()
+    mt5_years: set[int] = set()
+    if mt5_exports:
+        print(f"\nFound {len(mt5_exports)} MT5 export file(s):")
+        for p in mt5_exports:
+            print(f"  {p.name}")
+        mt5_tick_paths = build_tick_parquet_from_mt5(mt5_exports)
+        mt5_years = set(mt5_tick_paths.keys())
+        # Rebuild OHLCV for affected years
+        for year, tick_parquet in mt5_tick_paths.items():
+            print(f"\n  Rebuilding OHLCV for year {year} ...")
+            for tf_label, tf_truncate in TIMEFRAMES.items():
+                # Delete stale OHLCV so it gets rebuilt
+                stale = OHLCV_DIR / tf_label / f"XAUUSD_{tf_label}_{year}.parquet"
+                if stale.exists():
+                    stale.unlink()
+                build_ohlcv(year, tick_parquet, tf_label, tf_truncate)
+
+    # ------------------------------------------------------------------
+    # Phase 2: process Exness CSV/ZIP sources for remaining years
+    # ------------------------------------------------------------------
     for year in YEARS:
+        if year in mt5_years:
+            continue  # already handled above
+
         print(f"\n{'='*60}")
         print(f"  Year {year}")
         print(f"{'='*60}")
