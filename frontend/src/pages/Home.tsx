@@ -104,7 +104,7 @@ export function Home() {
               </div>
 
               {/* Metrics */}
-              <ResultCard results={result.results} />
+              <ResultCard results={result.results} stoppedOut={result.results.stopped_out} />
 
               {/* Per-month breakdown */}
               {result.results.per_year && (
@@ -143,6 +143,7 @@ export function Home() {
                     <EquityChart
                       data={result.results.equity_curve}
                       initialCapital={result.results.initial_capital}
+                      stoppedOut={result.results.stopped_out}
                       onTradeClick={handleEquityClick}
                       highlightedTrade={highlightedTrade !== null ? result.results.trades[highlightedTrade]?.trade : null}
                     />
