@@ -90,7 +90,7 @@ export function Home() {
                       {(result.parameters.years as number[]).join(', ')}
                     </span>
                   </h2>
-                  <p className="text-xs text-slate-500 mt-1">{result.id}</p>
+                  <p className="text-xs text-slate-500 mt-1 truncate max-w-xl">{result.id}</p>
                 </div>
                 <button
                   onClick={() => setShowEAModal(true)}
