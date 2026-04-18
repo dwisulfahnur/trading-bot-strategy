@@ -1,4 +1,20 @@
-import type { BacktestResults } from '../api/types';
+import type { BacktestResults, TradeRecord } from '../api/types';
+
+function holdMinutes(t: TradeRecord): number {
+  return (new Date(t.exit_time).getTime() - new Date(t.entry_time).getTime()) / 60_000;
+}
+
+function fmtDuration(mins: number): string {
+  if (mins < 60) return `${Math.round(mins)}m`;
+  const h = Math.floor(mins / 60);
+  const m = Math.round(mins % 60);
+  if (h >= 24) {
+    const d = Math.floor(h / 24);
+    const rh = h % 24;
+    return rh > 0 ? `${d}d ${rh}h` : `${d}d`;
+  }
+  return m > 0 ? `${h}h ${m}m` : `${h}h`;
+}
 
 interface Props {
   results: BacktestResults;
@@ -43,7 +59,19 @@ export function ResultCard({ results, stoppedOut }: Props) {
     max_consec_wins,
     max_consec_losses,
     compound,
+    trades,
   } = results;
+
+  // Hold period stats
+  const holdTimes = trades.map(holdMinutes);
+  const avgHold  = holdTimes.length ? holdTimes.reduce((a, b) => a + b, 0) / holdTimes.length : 0;
+  const maxHold  = holdTimes.length ? Math.max(...holdTimes) : 0;
+  const minHold  = holdTimes.length ? Math.min(...holdTimes) : 0;
+
+  const winHolds  = trades.filter((t) => t.exit_reason === 'tp').map(holdMinutes);
+  const lossHolds = trades.filter((t) => t.exit_reason !== 'tp').map(holdMinutes);
+  const avgWinHold  = winHolds.length  ? winHolds.reduce((a, b)  => a + b, 0) / winHolds.length  : null;
+  const avgLossHold = lossHolds.length ? lossHolds.reduce((a, b) => a + b, 0) / lossHolds.length : null;
 
   return (
     <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
@@ -99,6 +127,25 @@ export function ResultCard({ results, stoppedOut }: Props) {
       <MetricTile
         label="Max Consec. Losses"
         value={String(max_consec_losses ?? 0)}
+        good={null}
+      />
+      <MetricTile
+        label="Avg Hold"
+        value={holdTimes.length ? fmtDuration(avgHold) : '—'}
+        good={null}
+        sub={[
+          avgWinHold  != null ? `W: ${fmtDuration(avgWinHold)}`  : null,
+          avgLossHold != null ? `L: ${fmtDuration(avgLossHold)}` : null,
+        ].filter(Boolean).join(' · ')}
+      />
+      <MetricTile
+        label="Longest Hold"
+        value={holdTimes.length ? fmtDuration(maxHold) : '—'}
+        good={null}
+      />
+      <MetricTile
+        label="Shortest Hold"
+        value={holdTimes.length ? fmtDuration(minHold) : '—'}
         good={null}
       />
     </div>

@@ -24,6 +24,7 @@ export function Results() {
   // Filters
   const [filterTf, setFilterTf] = useState<string[]>([]);
   const [filterYears, setFilterYears] = useState<number[]>([]);
+  const [filterStrategies, setFilterStrategies] = useState<string[]>([]);
   const [ddMin, setDdMin] = useState('');
   const [ddMax, setDdMax] = useState('');
   const [wrMin, setWrMin] = useState('');
@@ -57,13 +58,15 @@ export function Results() {
     else { setSortKey(key); setSortAsc(key === 'max_drawdown_pct'); }
   };
 
-  // Derive available years from loaded results
+  // Derive available years and strategies from loaded results
   const availableYears = [...new Set(results.flatMap((r) => r.years))].sort();
+  const availableStrategies = [...new Set(results.map((r) => r.strategy))].sort();
 
   // Apply filters then sort
   const filtered = results.filter((r) => {
     if (filterTf.length > 0 && !filterTf.includes(r.timeframe)) return false;
     if (filterYears.length > 0 && !filterYears.some((y) => r.years.includes(y))) return false;
+    if (filterStrategies.length > 0 && !filterStrategies.includes(r.strategy)) return false;
     if (ddMin !== '' && r.max_drawdown_pct < parseFloat(ddMin)) return false;
     if (ddMax !== '' && r.max_drawdown_pct > parseFloat(ddMax)) return false;
     if (wrMin !== '' && r.win_rate_pct < parseFloat(wrMin)) return false;
@@ -107,7 +110,7 @@ export function Results() {
   const compareResults = results.filter((r) => compareIds.has(r.id));
 
   const hasActiveFilters =
-    filterTf.length > 0 || filterYears.length > 0 ||
+    filterTf.length > 0 || filterYears.length > 0 || filterStrategies.length > 0 ||
     ddMin !== '' || ddMax !== '' || wrMin !== '' || wrMax !== '';
 
   const SortIcon = ({ k }: { k: SortKey }) =>
@@ -152,7 +155,7 @@ export function Results() {
               <span className="text-sm font-medium text-slate-300">Filters</span>
               {hasActiveFilters && (
                 <button
-                  onClick={() => { setFilterTf([]); setFilterYears([]); setDdMin(''); setDdMax(''); setWrMin(''); setWrMax(''); }}
+                  onClick={() => { setFilterTf([]); setFilterYears([]); setFilterStrategies([]); setDdMin(''); setDdMax(''); setWrMin(''); setWrMax(''); }}
                   className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
                 >
                   Clear all
@@ -201,6 +204,30 @@ export function Results() {
                         }`}
                       >
                         {yr}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Strategy */}
+              {availableStrategies.length > 1 && (
+                <div className="space-y-1.5">
+                  <span className="text-xs text-slate-500 uppercase tracking-wide">Strategy</span>
+                  <div className="flex gap-1.5 flex-wrap">
+                    {availableStrategies.map((s) => (
+                      <button
+                        key={s}
+                        onClick={() => setFilterStrategies((prev) =>
+                          prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]
+                        )}
+                        className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                          filterStrategies.includes(s)
+                            ? 'bg-blue-600 text-white'
+                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                        }`}
+                      >
+                        {s.replace(/_/g, ' ')}
                       </button>
                     ))}
                   </div>
@@ -308,7 +335,7 @@ export function Results() {
             <div className="flex flex-col items-center justify-center py-12 text-slate-600 gap-2">
               <p className="text-sm">No results match the current filters.</p>
               <button
-                onClick={() => { setFilterTf([]); setFilterYears([]); setDdMin(''); setDdMax(''); setWrMin(''); setWrMax(''); }}
+                onClick={() => { setFilterTf([]); setFilterYears([]); setFilterStrategies([]); setDdMin(''); setDdMax(''); setWrMin(''); setWrMax(''); }}
                 className="text-blue-400 hover:text-blue-300 text-xs"
               >
                 Clear filters

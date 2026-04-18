@@ -6,6 +6,8 @@ import { EquityChart } from '../components/EquityChart';
 import { PriceChart } from '../components/PriceChart';
 import { TradeTable } from '../components/TradeTable';
 import { PerMonthTable } from '../components/PerMonthTable';
+import { TradeStatsTable } from '../components/TradeStatsTable';
+import { PipCurve } from '../components/PipCurve';
 import { EAModal } from '../components/EAModal';
 import { api } from '../api/client';
 import type { BacktestResult, OhlcvBar } from '../api/types';
@@ -13,7 +15,7 @@ import type { BacktestResult, OhlcvBar } from '../api/types';
 export function Home() {
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [highlightedTrade, setHighlightedTrade] = useState<number | null>(null);
-  const [activeTab, setActiveTab] = useState<'equity' | 'price' | 'trades'>('equity');
+  const [activeTab, setActiveTab] = useState<'equity' | 'price' | 'trades' | 'stats'>('equity');
   const [showEAModal, setShowEAModal] = useState(false);
 
   // Fetch OHLCV only when we have a result
@@ -122,7 +124,7 @@ export function Home() {
               {/* Chart tabs */}
               <div>
                 <div className="flex gap-1 mb-4 bg-slate-900 rounded-lg p-1 w-fit border border-slate-800">
-                  {(['equity', 'price', 'trades'] as const).map((tab) => (
+                  {(['equity', 'price', 'trades', 'stats'] as const).map((tab) => (
                     <button
                       key={tab}
                       onClick={() => setActiveTab(tab)}
@@ -132,21 +134,27 @@ export function Home() {
                           : 'text-slate-400 hover:text-slate-200'
                       }`}
                     >
-                      {tab === 'equity' ? 'Equity Curve' : tab === 'price' ? 'Price Chart' : 'Trades'}
+                      {tab === 'equity' ? 'Equity Curve' : tab === 'price' ? 'Price Chart' : tab === 'trades' ? 'Trades' : 'Statistics'}
                     </button>
                   ))}
                 </div>
 
                 {activeTab === 'equity' && (
-                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-                    <h3 className="text-sm font-semibold text-slate-400 mb-4">Equity Curve</h3>
-                    <EquityChart
-                      data={result.results.equity_curve}
-                      initialCapital={result.results.initial_capital}
-                      stoppedOut={result.results.stopped_out}
-                      onTradeClick={handleEquityClick}
-                      highlightedTrade={highlightedTrade !== null ? result.results.trades[highlightedTrade]?.trade : null}
-                    />
+                  <div className="space-y-4">
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+                      <h3 className="text-sm font-semibold text-slate-400 mb-4">Equity Curve</h3>
+                      <EquityChart
+                        data={result.results.equity_curve}
+                        initialCapital={result.results.initial_capital}
+                        stoppedOut={result.results.stopped_out}
+                        onTradeClick={handleEquityClick}
+                        highlightedTrade={highlightedTrade !== null ? result.results.trades[highlightedTrade]?.trade : null}
+                      />
+                    </div>
+                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+                      <h3 className="text-sm font-semibold text-slate-400 mb-4">Pip Curve</h3>
+                      <PipCurve trades={result.results.trades} />
+                    </div>
                   </div>
                 )}
 
@@ -179,6 +187,15 @@ export function Home() {
                       highlightedTrade={highlightedTrade}
                       onTradeClick={handleTradeClick}
                     />
+                  </div>
+                )}
+
+                {activeTab === 'stats' && (
+                  <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
+                    <h3 className="text-sm font-semibold text-slate-400 mb-4">
+                      Trade Statistics
+                    </h3>
+                    <TradeStatsTable trades={result.results.trades} />
                   </div>
                 )}
               </div>
