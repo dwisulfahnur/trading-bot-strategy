@@ -8,12 +8,14 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import Any
 
+import polars as pl
+
 # Ensure project root is importable
 ROOT = Path(__file__).parent.parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from backtest import load_data, load_strategy, simulate, compute_metrics, save_result
+from backtest import load_data, load_tick_data, load_strategy, simulate, compute_metrics, save_result
 
 # In-memory job registry  {job_id: {"status": ..., "result_id": ..., "error": ...}}
 _jobs: dict[str, dict[str, Any]] = {}
@@ -42,16 +44,37 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
         commission_per_lot = request_data.get("commission_per_lot", 3.5)
         params = request_data.get("params", {})
 
-        df = load_data(years, timeframe)
-        strategy = load_strategy(strategy_name, params)
+        # Prepend the previous year as EMA warmup so indicator values match
+        # MT5's fully-seeded EMA by the first bar of the test period.
+        warmup_year = min(years) - 1
+        all_years   = [warmup_year] + sorted(years)
+
+        df        = load_data(all_years, timeframe)
+        tick_data = load_tick_data(all_years)
+        strategy  = load_strategy(strategy_name, params)
         df = strategy.generate_signals(df)
-        trades = simulate(df, breakeven_r=breakeven_r)
+
+        # Suppress signals from the warmup year — used only for EMA convergence
+        df = df.with_columns(
+            pl.when(pl.col("_year").is_in(years))
+            .then(pl.col("signal"))
+            .otherwise(pl.lit(0).cast(pl.Int8))
+            .alias("signal")
+        )
+
+        max_pending_bars = int(params.get("max_pending_bars", 5)) if strategy_name == "momentum_candle" else None
+        trades = simulate(df, tick_data=tick_data, breakeven_r=breakeven_r, max_pending_bars=max_pending_bars)
 
         metrics = compute_metrics(trades, initial_capital, risk_pct, compound=compound, commission_per_lot=commission_per_lot)
         metrics["compound"] = compound
         metrics["breakeven_r"] = breakeven_r
 
-        out_path = save_result(metrics, strategy_name, params, timeframe, years)
+        # Include simulation-level params so EA generator can read them from parameters
+        params_with_sim = {
+            **params,
+            "breakeven_r": breakeven_r,
+        }
+        out_path = save_result(metrics, strategy_name, params_with_sim, timeframe, years)
         result_id = out_path.stem
 
         _jobs[job_id] = {"status": "done", "result_id": result_id, "error": None}
