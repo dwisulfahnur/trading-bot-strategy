@@ -24,6 +24,12 @@ def run(req: BacktestRequest, background_tasks: BackgroundTasks) -> JobStatus:
         raise HTTPException(400, "symbol is required")
     if not req.years:
         raise HTTPException(400, "At least one year must be selected")
+    if req.breakeven_r is not None and req.breakeven_sl_r >= req.breakeven_r:
+        raise HTTPException(
+            400,
+            f"breakeven_sl_r ({req.breakeven_sl_r}) must be less than breakeven_r ({req.breakeven_r}). "
+            "You can't lock in more profit than the trigger level — the SL would overshoot the current price and exit immediately."
+        )
 
     job_id = create_job()
     # Run in a real thread so it doesn't block the event loop

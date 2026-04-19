@@ -177,6 +177,23 @@ const PARAM_META: Record<string, ParamInfo> = {
       'Only generate signals when the bar falls inside the selected market sessions (UTC times). Use to focus trading on the most liquid hours.',
   },
 
+  // Support & Resistance
+  pivot_n: {
+    label: 'Pivot N (each side)',
+    description:
+      'Number of candles required on each side of the center bar to confirm a pivot high (resistance) or pivot low (support). e.g. N=5 means the center bar must have a higher high (or lower low) than the 5 bars on each side. Higher N = fewer but more significant S/R levels.',
+  },
+  zone_tolerance: {
+    label: 'Zone Tolerance (price)',
+    description:
+      'How close price must get to a S/R level to count as a "touch". e.g. 0.5 means the candle low only needs to reach within $0.50 of the support level to trigger a bounce signal. Increase if too few signals; decrease for stricter touches.',
+  },
+  use_ema_filter: {
+    label: 'EMA Trend Filter',
+    description:
+      'When ON, buy signals are only taken when price is above the EMA (uptrend) and sell signals only when below (downtrend). Turn OFF to allow counter-trend S/R trades in both directions.',
+  },
+
   // Order Block (SMC)
   structure_period: {
     label: 'Structure Period',
@@ -240,6 +257,31 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
         'momentum_candle_filter',
         'mc_body_ratio_min', 'mc_volume_factor', 'mc_volume_lookback',
       ],
+    },
+    {
+      title: 'Sideways Filter',
+      params: [
+        'sideways_filter',
+        'adx_period', 'adx_threshold',
+        'ema_slope_period', 'ema_slope_min',
+        'choppiness_period', 'choppiness_max',
+        'alligator_jaw', 'alligator_teeth', 'alligator_lips',
+        'stochrsi_rsi_period', 'stochrsi_stoch_period', 'stochrsi_oversold', 'stochrsi_overbought',
+      ],
+    },
+  ],
+  support_resistance: [
+    {
+      title: 'Signal Generation',
+      params: ['pivot_n', 'zone_tolerance', 'rr_ratio'],
+    },
+    {
+      title: 'Trend Filter',
+      params: ['ema_period', 'use_ema_filter'],
+    },
+    {
+      title: 'Session Filter',
+      params: ['sessions'],
     },
     {
       title: 'Sideways Filter',
@@ -420,6 +462,10 @@ export function BacktestForm({ onResult }: Props) {
     e.preventDefault();
     if (selectedYears.length === 0) {
       setError('Select at least one year');
+      return;
+    }
+    if (breakevenOn && breakevenSlR >= breakevenR) {
+      setError(`Lock SL (${breakevenSlR}R) must be less than Trigger (${breakevenR}R) — you can't lock in more profit than the trigger level.`);
       return;
     }
     setError(null);
@@ -742,6 +788,9 @@ export function BacktestForm({ onResult }: Props) {
                   />
                   <span className="text-xs text-slate-500">R <span className="text-slate-600">(0 = entry, 0.5 = lock profit)</span></span>
                 </div>
+                {breakevenSlR >= breakevenR && (
+                  <p className="text-xs text-red-400">Lock ({breakevenSlR}R) must be &lt; Trigger ({breakevenR}R)</p>
+                )}
               </>
             )}
           </div>
