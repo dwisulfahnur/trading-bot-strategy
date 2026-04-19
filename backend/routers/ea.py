@@ -49,13 +49,24 @@ def _param_lines(params: dict) -> str:
     return "\n".join(f"  {k} = {v}" for k, v in params.items())
 
 
-def _breakeven_section(breakeven_r) -> str:
+def _breakeven_section(breakeven_r, breakeven_sl_r: float = 0.0) -> str:
     if not breakeven_r:
         return ""
+    sl_r = float(breakeven_sl_r)
+    if sl_r == 0.0:
+        lock_desc = "entry price (break-even — 0R, no loss)"
+    elif sl_r > 0:
+        lock_desc = f"entry + {sl_r} × initial_sl_distance (locking in {sl_r}R profit)"
+    else:
+        lock_desc = f"entry − {abs(sl_r)} × initial_sl_distance (cutting loss to {sl_r}R)"
     return (
-        f"\n### Break-Even Stop\n"
-        f"Once profit reaches {breakeven_r}R (price moves {breakeven_r} × initial_sl_distance in trade's favour), "
-        f"move SL to entry price. Subsequent SL hit closes at break-even (0 loss).\n"
+        f"\n### SL Move After Trigger\n"
+        f"Once profit reaches {breakeven_r}R (price moves {breakeven_r} × initial_sl_distance "
+        f"in the trade's favour), move the stop-loss to {lock_desc}. "
+        f"A subsequent SL hit closes at {sl_r:+.1f}R.\n"
+        f"- Store `initial_sl_distance` at entry and never overwrite it.\n"
+        f"- Track whether the SL has already been moved (boolean flag per trade) — "
+        f"trigger fires only once per trade.\n"
     )
 
 
@@ -120,26 +131,31 @@ Call `CountPeriodSL(InpMagicNumber)` before placing any order. Skip if count >= 
 
 
 def _risk_block(params: dict, lang: str) -> str:
-    risk_pct_pct = float(params.get("risk_pct", 0.02)) * 100
-    compound = params.get("compound", False)
+    from backtest import PAIR_CONFIG
+    risk_pct_pct   = float(params.get("risk_pct", 0.02)) * 100
+    compound       = params.get("compound", False)
+    symbol         = params.get("symbol", "XAUUSD")
+    pair_cfg       = PAIR_CONFIG.get(symbol, PAIR_CONFIG["XAUUSD"])
+    contract_size  = pair_cfg["contract_size"]
     compound_label = (
         "Yes — recalculate from current account balance each trade"
         if compound
         else "No — always use fixed initial balance"
     )
-    breakeven_r  = params.get("breakeven_r")
-    max_sl       = params.get("max_sl_per_period")
-    sl_period    = params.get("sl_period", "none")
+    breakeven_r    = params.get("breakeven_r")
+    breakeven_sl_r = float(params.get("breakeven_sl_r", 0.0))
+    max_sl         = params.get("max_sl_per_period")
+    sl_period      = params.get("sl_period", "none")
 
     return (
         f"## Risk Management\n"
         f"- Risk per trade: {risk_pct_pct:.1f}% of account balance\n"
         f"- Lot size: `(balance × risk_pct) / (sl_distance × contract_size)`\n"
-        f"  - XAUUSD contract_size = 100 oz/lot\n"
+        f"  - {symbol} contract_size = {contract_size:,} per lot\n"
         f"  - sl_distance = absolute price difference of entry to SL\n"
         f"  - Clamp to broker min/max lot, round to lot step\n"
         f"- Compounding: {compound_label}\n"
-        + _breakeven_section(breakeven_r)
+        + _breakeven_section(breakeven_r, breakeven_sl_r)
         + _sl_limit_section(max_sl, sl_period)
     )
 
@@ -309,7 +325,7 @@ Skip signal if the momentum candle condition is not met.
 
     return f"""## Strategy: William Fractal Breakout
 ## Platform: MetaTrader {mt_ver} ({lang})
-## Instrument: XAUUSD
+## Instrument: {params.get('symbol', 'XAUUSD')}
 ## Timeframe: {params.get('timeframe', 'H1')}
 
 ### Backtest Performance
@@ -457,7 +473,7 @@ def _prompt_momentum_candle(
 
     return f"""## Strategy: Momentum Candle Scalping
 ## Platform: MetaTrader {mt_ver} ({lang})
-## Instrument: XAUUSD
+## Instrument: {params.get('symbol', 'XAUUSD')}
 ## Timeframe: {params.get('timeframe', 'H1')}
 
 ### Backtest Performance
@@ -678,7 +694,7 @@ If outside OTE zone → skip signal.
 
     return f"""## Strategy: Order Block (SMC)
 ## Platform: MetaTrader {mt_ver} ({lang})
-## Instrument: XAUUSD
+## Instrument: {params.get('symbol', 'XAUUSD')}
 ## Timeframe: {params.get('timeframe', 'H1')}
 
 ### Backtest Performance

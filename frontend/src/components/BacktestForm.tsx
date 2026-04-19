@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from 'react';
 import { useQuery } from '@tanstack/react-query';
+import Select from 'react-select';
 import { api } from '../api/client';
 import type { BacktestRequest, BacktestResult, StrategyMeta } from '../api/types';
 
@@ -359,6 +360,7 @@ export function BacktestForm({ onResult }: Props) {
   });
 
   const [strategy, setStrategy] = useState('william_fractals');
+  const [selectedSymbol, setSelectedSymbol] = useState('XAUUSD');
   const [selectedYears, setSelectedYears] = useState<number[]>([2025, 2026]);
   const [timeframe, setTimeframe] = useState('H1');
   const [capital, setCapital] = useState(10000);
@@ -366,6 +368,7 @@ export function BacktestForm({ onResult }: Props) {
   const [compound, setCompound] = useState(false);
   const [breakevenOn, setBreakevenOn] = useState(false);
   const [breakevenR, setBreakevenR] = useState(1.0);
+  const [breakevenSlR, setBreakevenSlR] = useState(0.0);
   const [slLimitOn, setSlLimitOn] = useState(false);
   const [slLimitMax, setSlLimitMax] = useState(2);
   const [slLimitPeriod, setSlLimitPeriod] = useState<'day' | 'week' | 'month'>('day');
@@ -427,10 +430,12 @@ export function BacktestForm({ onResult }: Props) {
         strategy,
         years: selectedYears,
         timeframe,
+        symbol: selectedSymbol,
         initial_capital: capital,
         risk_pct: riskPct / 100,
         compound,
-        breakeven_r: breakevenOn ? breakevenR : null,
+        breakeven_r:    breakevenOn ? breakevenR : null,
+        breakeven_sl_r: breakevenOn ? breakevenSlR : 0.0,
         commission_per_lot: commissionPerLot,
         max_sl_per_period: slLimitOn ? slLimitMax : null,
         sl_period: slLimitOn ? slLimitPeriod : 'none',
@@ -445,7 +450,10 @@ export function BacktestForm({ onResult }: Props) {
     }
   };
 
-  const availableYears = dataAvail?.years ?? [2021, 2022, 2023, 2024, 2025, 2026];
+  const availableSymbols = dataAvail ? Object.keys(dataAvail.symbols) : ['XAUUSD'];
+  const symbolData = dataAvail?.symbols[selectedSymbol];
+  const availableYears = symbolData?.years ?? [2021, 2022, 2023, 2024, 2025, 2026];
+  const availableTimeframes = symbolData?.timeframes ?? ['M1', 'M5', 'M15', 'H1'];
 
   return (
     <form onSubmit={handleSubmit} className="space-y-6">
@@ -463,6 +471,49 @@ export function BacktestForm({ onResult }: Props) {
             </option>
           ))}
         </select>
+      </div>
+
+      {/* Symbol selector */}
+      <div>
+        <label className="block text-sm font-medium text-slate-300 mb-2">Symbol</label>
+        <Select
+          options={availableSymbols.map((sym) => ({ value: sym, label: sym }))}
+          value={{ value: selectedSymbol, label: selectedSymbol }}
+          onChange={(opt) => opt && setSelectedSymbol(opt.value)}
+          isSearchable
+          styles={{
+            control: (base, state) => ({
+              ...base,
+              backgroundColor: '#1e293b',
+              borderColor: state.isFocused ? '#3b82f6' : '#475569',
+              borderRadius: '0.5rem',
+              boxShadow: 'none',
+              '&:hover': { borderColor: '#64748b' },
+            }),
+            menu: (base) => ({
+              ...base,
+              backgroundColor: '#1e293b',
+              border: '1px solid #475569',
+              borderRadius: '0.5rem',
+              overflow: 'hidden',
+            }),
+            option: (base, state) => ({
+              ...base,
+              backgroundColor: state.isSelected
+                ? '#2563eb'
+                : state.isFocused
+                ? '#334155'
+                : 'transparent',
+              color: state.isSelected ? '#fff' : '#cbd5e1',
+              fontSize: '0.875rem',
+              cursor: 'pointer',
+            }),
+            singleValue: (base) => ({ ...base, color: '#f1f5f9', fontSize: '0.875rem' }),
+            input: (base) => ({ ...base, color: '#f1f5f9', fontSize: '0.875rem' }),
+            indicatorSeparator: () => ({ display: 'none' }),
+            dropdownIndicator: (base) => ({ ...base, color: '#64748b', padding: '0 6px' }),
+          }}
+        />
       </div>
 
       {/* Year selection */}
@@ -490,7 +541,7 @@ export function BacktestForm({ onResult }: Props) {
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-2">Timeframe</label>
         <div className="flex gap-2">
-          {(dataAvail?.timeframes ?? ['M1', 'M5', 'M15', 'H1']).map((tf) => (
+          {availableTimeframes.map((tf) => (
             <button
               key={tf}
               type="button"
@@ -549,7 +600,7 @@ export function BacktestForm({ onResult }: Props) {
       <div>
         <label className="block text-sm font-medium text-slate-300 mb-1">
           Commission per Lot (USD)
-          <InfoTooltip text="Round-trip commission charged per standard lot (entry + exit combined). For XAUUSD: 1 lot = 100 oz. Deducted from each trade's profit." />
+          <InfoTooltip text="Round-trip commission charged per standard lot (entry + exit combined). Deducted from each trade's profit." />
         </label>
         <input
           type="number"
@@ -658,31 +709,41 @@ export function BacktestForm({ onResult }: Props) {
               }`}
             />
           </button>
-          <div className="flex flex-col gap-1">
+          <div className="flex flex-col gap-1.5">
             <div className="flex items-center gap-2">
-              <span className="text-sm text-slate-300 flex-shrink-0">
-                Move SL to break-even
-              </span>
-              <InfoTooltip text="Once price moves this many R in profit, the stop-loss is moved to the entry price (break-even). A subsequent SL hit closes at 0 loss instead of −1R." />
+              <span className="text-sm text-slate-300 flex-shrink-0">Move SL after trigger</span>
+              <InfoTooltip text="Once price reaches the trigger R, the stop-loss is moved to the locked R level. E.g. trigger=1R, lock=0.5R locks in 0.5R profit. Lock=0 is classic break-even. Lock can be negative to cut losses early." />
             </div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-slate-500">Trigger at</span>
-              <input
-                type="number"
-                value={breakevenR}
-                min={0.1}
-                max={10}
-                step={0.1}
-                disabled={!breakevenOn}
-                onChange={(e) => setBreakevenR(parseFloat(e.target.value) || 1.0)}
-                className={`w-20 bg-slate-800 border rounded px-2 py-1 text-sm text-center transition-colors ${
-                  breakevenOn
-                    ? 'border-amber-500 text-amber-300'
-                    : 'border-slate-700 text-slate-600 cursor-not-allowed'
-                }`}
-              />
-              <span className="text-xs text-slate-500">R profit</span>
-            </div>
+            {breakevenOn && (
+              <>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-500 w-14">Trigger</span>
+                  <input
+                    type="number"
+                    value={breakevenR}
+                    min={0.1}
+                    max={10}
+                    step={0.1}
+                    onChange={(e) => setBreakevenR(parseFloat(e.target.value) || 1.0)}
+                    className="w-20 bg-slate-800 border border-amber-500 rounded px-2 py-1 text-sm text-center text-amber-300"
+                  />
+                  <span className="text-xs text-slate-500">R</span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-slate-500 w-14">Lock SL at</span>
+                  <input
+                    type="number"
+                    value={breakevenSlR}
+                    min={-2}
+                    max={5}
+                    step={0.1}
+                    onChange={(e) => setBreakevenSlR(parseFloat(e.target.value) ?? 0.0)}
+                    className="w-20 bg-slate-800 border border-amber-500 rounded px-2 py-1 text-sm text-center text-amber-300"
+                  />
+                  <span className="text-xs text-slate-500">R <span className="text-slate-600">(0 = entry, 0.5 = lock profit)</span></span>
+                </div>
+              </>
+            )}
           </div>
         </div>
       </div>

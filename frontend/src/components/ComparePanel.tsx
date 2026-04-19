@@ -117,7 +117,8 @@ export function ComparePanel({ results, onRemove }: Props) {
     { key: 'initial_capital', label: 'Capital' },
     { key: 'risk_pct', label: 'Risk %' },
     { key: 'compound', label: 'Compound' },
-    { key: 'breakeven_r', label: 'Break-even R' },
+    { key: 'breakeven_r',    label: 'SL Move Trigger R' },
+    { key: 'breakeven_sl_r', label: 'SL Lock R' },
     { key: 'commission_per_lot', label: 'Commission/Lot' },
   ];
 
