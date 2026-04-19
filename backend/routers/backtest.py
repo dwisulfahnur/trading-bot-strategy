@@ -20,6 +20,8 @@ VALID_TIMEFRAMES = ["M1", "M5", "M15", "H1", "H4"]
 def run(req: BacktestRequest, background_tasks: BackgroundTasks) -> JobStatus:
     if req.timeframe not in VALID_TIMEFRAMES:
         raise HTTPException(400, f"Invalid timeframe. Choose from {VALID_TIMEFRAMES}")
+    if not req.symbol:
+        raise HTTPException(400, "symbol is required")
     if not req.years:
         raise HTTPException(400, "At least one year must be selected")
 

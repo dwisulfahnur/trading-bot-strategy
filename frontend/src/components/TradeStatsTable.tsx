@@ -16,10 +16,10 @@ type GroupBy = 'session' | 'hour' | 'day' | 'month';
 type Metric  = 'r' | 'pips';
 
 // ── Pip calculation ────────────────────────────────────────────────────────
-// 1 pip = $0.10 for XAUUSD → multiply raw price diff by 10
-function tradePips(t: TradeRecord): number {
+// pipMult converts raw price diff → pips (e.g. XAUUSD: 10.0, meaning 1 price unit = 10 pips)
+function tradePips(t: TradeRecord, pipMult: number): number {
   const diff = t.exit_price - t.entry_price;
-  return (t.direction === 'long' ? diff : -diff) * 10;
+  return (t.direction === 'long' ? diff : -diff) * pipMult;
 }
 
 // ── Distribution bar charts ────────────────────────────────────────────────
@@ -66,10 +66,10 @@ function toLabel(key: string, groupBy: GroupBy): string {
   return MONTH_NAMES[parseInt(key, 10) - 1];
 }
 
-function makeBucket(key: string, ts: TradeRecord[], groupBy: GroupBy): BucketData {
+function makeBucket(key: string, ts: TradeRecord[], groupBy: GroupBy, pipMult: number): BucketData {
   const wins     = ts.filter((t) => t.exit_reason === 'tp').length;
   const net_r    = ts.reduce((sum, t) => sum + t.pnl_r, 0);
-  const net_pips = ts.reduce((sum, t) => sum + tradePips(t), 0);
+  const net_pips = ts.reduce((sum, t) => sum + tradePips(t, pipMult), 0);
   return {
     label:    toLabel(key, groupBy),
     sublabel: groupBy === 'session' ? SESSIONS.find((s) => s.label === key)?.hours : undefined,
@@ -83,7 +83,7 @@ function makeBucket(key: string, ts: TradeRecord[], groupBy: GroupBy): BucketDat
   };
 }
 
-function computeBuckets(trades: TradeRecord[], groupBy: GroupBy): BucketData[] {
+function computeBuckets(trades: TradeRecord[], groupBy: GroupBy, pipMult: number): BucketData[] {
   const map = new Map<string, TradeRecord[]>();
   for (const t of trades) {
     const key = getKey(t.entry_time, groupBy);
@@ -91,9 +91,9 @@ function computeBuckets(trades: TradeRecord[], groupBy: GroupBy): BucketData[] {
     map.get(key)!.push(t);
   }
   if (groupBy === 'session') {
-    return SESSIONS.filter((s) => map.has(s.label)).map((s) => makeBucket(s.label, map.get(s.label)!, groupBy));
+    return SESSIONS.filter((s) => map.has(s.label)).map((s) => makeBucket(s.label, map.get(s.label)!, groupBy, pipMult));
   }
-  return [...map.keys()].sort().map((k) => makeBucket(k, map.get(k)!, groupBy));
+  return [...map.keys()].sort().map((k) => makeBucket(k, map.get(k)!, groupBy, pipMult));
 }
 
 function fmtMetric(v: number, metric: Metric): string {
@@ -186,9 +186,9 @@ const GROUPS: { key: GroupBy; title: string }[] = [
   { key: 'month',   title: 'By Month'   },
 ];
 
-interface Props { trades: TradeRecord[] }
+interface Props { trades: TradeRecord[]; pipMult?: number }
 
-export function TradeStatsTable({ trades }: Props) {
+export function TradeStatsTable({ trades, pipMult = 10.0 }: Props) {
   const [metric, setMetric] = useState<Metric>('r');
 
   if (trades.length === 0) return null;
@@ -220,7 +220,7 @@ export function TradeStatsTable({ trades }: Props) {
       {/* 2-per-row distribution grid */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {GROUPS.map(({ key, title }) => {
-          const buckets = computeBuckets(trades, key);
+          const buckets = computeBuckets(trades, key, pipMult);
           return (
             <div key={key} className="bg-slate-800/40 border border-slate-700/60 rounded-xl p-4">
               <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">{title}</p>

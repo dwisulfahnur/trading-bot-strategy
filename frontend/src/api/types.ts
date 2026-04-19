@@ -14,19 +14,25 @@ export interface StrategyMeta {
   parameters: ParameterSpec[];
 }
 
-export interface DataAvailable {
-  years: number[];
+export interface SymbolData {
   timeframes: string[];
+  years: number[];
+}
+
+export interface DataAvailable {
+  symbols: Record<string, SymbolData>;
 }
 
 export interface BacktestRequest {
   strategy: string;
   years: number[];
   timeframe: string;
+  symbol: string;
   initial_capital: number;
   risk_pct: number;
   compound: boolean;
   breakeven_r: number | null;
+  breakeven_sl_r: number;
   commission_per_lot: number;
   max_sl_per_period: number | null;
   sl_period: string;
@@ -44,6 +50,7 @@ export interface ResultSummary {
   id: string;
   created_at: string;
   strategy: string;
+  symbol?: string;
   timeframe: string;
   years: number[];
   total_return_pct: number;
@@ -96,6 +103,8 @@ export interface BacktestResults {
   max_consec_losses: number;
   compound: boolean;
   stopped_out: boolean;
+  symbol?: string;
+  pip_mult?: number;
   per_year: Record<string, { total_trades: number; win_rate_pct: number; return_pct: number }>;
   equity_curve: EquityPoint[];
   trades: TradeRecord[];

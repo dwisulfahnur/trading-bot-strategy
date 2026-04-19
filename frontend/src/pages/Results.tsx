@@ -127,9 +127,9 @@ export function Results() {
         <div className="flex items-center gap-3">
           <a href="/" className="flex items-center gap-3 hover:opacity-80">
             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold text-sm">
-              XAU
+              FX
             </div>
-            <span className="font-semibold text-lg text-slate-100">XAUUSD Backtest</span>
+            <span className="font-semibold text-lg text-slate-100">Strategy Backtest</span>
           </a>
           <span className="text-slate-600">/</span>
           <span className="text-slate-400">Saved Results</span>

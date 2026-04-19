@@ -35,10 +35,11 @@ export const api = {
     http.post<EAResponse>('/ea/generate', req).then((r) => r.data),
 
   // OHLCV
-  getOhlcv: (timeframe: string, years: number[], dateFrom?: string, dateTo?: string) => {
+  getOhlcv: (timeframe: string, years: number[], symbol: string = 'XAUUSD', dateFrom?: string, dateTo?: string) => {
     const params: Record<string, string> = {
       timeframe,
       years: years.join(','),
+      symbol,
     };
     if (dateFrom) params.date_from = dateFrom;
     if (dateTo) params.date_to = dateTo;

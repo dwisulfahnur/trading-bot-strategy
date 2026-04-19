@@ -37,10 +37,12 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
         strategy_name = request_data["strategy"]
         years = request_data["years"]
         timeframe = request_data["timeframe"]
+        symbol = request_data.get("symbol", "XAUUSD")
         initial_capital = request_data["initial_capital"]
         risk_pct = request_data["risk_pct"]
         compound = request_data["compound"]
-        breakeven_r = request_data.get("breakeven_r", None)
+        breakeven_r    = request_data.get("breakeven_r", None)
+        breakeven_sl_r = request_data.get("breakeven_sl_r", 0.0)
         commission_per_lot = request_data.get("commission_per_lot", 3.5)
         max_sl_per_period = request_data.get("max_sl_per_period", None)
         sl_period = request_data.get("sl_period", "none")
@@ -51,8 +53,8 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
         warmup_year = min(years) - 1
         all_years   = [warmup_year] + sorted(years)
 
-        df        = load_data(all_years, timeframe)
-        tick_data = load_tick_data(all_years)
+        df        = load_data(all_years, timeframe, symbol=symbol)
+        tick_data = load_tick_data(all_years, symbol=symbol)
         strategy  = load_strategy(strategy_name, params)
         df = strategy.generate_signals(df)
 
@@ -69,23 +71,26 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
             df,
             tick_data=tick_data,
             breakeven_r=breakeven_r,
+            breakeven_sl_r=breakeven_sl_r,
             max_pending_bars=max_pending_bars,
             max_sl_per_period=max_sl_per_period,
             sl_period=sl_period,
         )
 
-        metrics = compute_metrics(trades, initial_capital, risk_pct, compound=compound, commission_per_lot=commission_per_lot)
-        metrics["compound"] = compound
-        metrics["breakeven_r"] = breakeven_r
+        metrics = compute_metrics(trades, initial_capital, risk_pct, compound=compound, commission_per_lot=commission_per_lot, symbol=symbol)
+        metrics["compound"]       = compound
+        metrics["breakeven_r"]    = breakeven_r
+        metrics["breakeven_sl_r"] = breakeven_sl_r
 
         # Include simulation-level params so EA generator can read them from parameters
         params_with_sim = {
             **params,
-            "breakeven_r": breakeven_r,
+            "breakeven_r":    breakeven_r,
+            "breakeven_sl_r": breakeven_sl_r,
             "max_sl_per_period": max_sl_per_period,
             "sl_period": sl_period,
         }
-        out_path = save_result(metrics, strategy_name, params_with_sim, timeframe, years)
+        out_path = save_result(metrics, strategy_name, params_with_sim, timeframe, years, symbol=symbol)
         result_id = out_path.stem
 
         _jobs[job_id] = {"status": "done", "result_id": result_id, "error": None}

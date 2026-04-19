@@ -20,16 +20,17 @@ export function Home() {
 
   // Fetch OHLCV only when we have a result
   const { data: bars = [] } = useQuery<OhlcvBar[]>({
-    queryKey: ['ohlcv', result?.parameters?.timeframe, result?.parameters?.years],
+    queryKey: ['ohlcv', result?.parameters?.timeframe, result?.parameters?.years, result?.parameters?.symbol],
     queryFn: () => {
       if (!result) return Promise.resolve([]);
       const tf = result.parameters.timeframe as string;
       const years = result.parameters.years as number[];
+      const symbol = (result.parameters.symbol as string) ?? 'XAUUSD';
       // Filter to date range of trades
       const trades = result.results.trades;
       const dateFrom = trades[0]?.entry_time?.slice(0, 10);
       const dateTo = trades[trades.length - 1]?.exit_time?.slice(0, 10);
-      return api.getOhlcv(tf, years, dateFrom, dateTo);
+      return api.getOhlcv(tf, years, symbol, dateFrom, dateTo);
     },
     enabled: !!result,
   });
@@ -50,9 +51,9 @@ export function Home() {
       <header className="border-b border-slate-800 px-6 py-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-bold text-sm">
-            XAU
+            FX
           </div>
-          <span className="font-semibold text-lg text-slate-100">XAUUSD Backtest</span>
+          <span className="font-semibold text-lg text-slate-100">Strategy Backtest</span>
         </div>
         <a href="/results" className="text-sm text-slate-400 hover:text-slate-200 transition-colors">
           Saved Results →
@@ -86,6 +87,7 @@ export function Home() {
                   <h2 className="text-xl font-semibold text-slate-100">
                     {result.strategy.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase())}
                     <span className="ml-2 text-slate-500 font-normal text-base">
+                      {(result.parameters.symbol as string) ?? 'XAUUSD'} ·{' '}
                       {(result.parameters.timeframe as string)} ·{' '}
                       {(result.parameters.years as number[]).join(', ')}
                     </span>
@@ -186,6 +188,7 @@ export function Home() {
                       trades={result.results.trades}
                       highlightedTrade={highlightedTrade}
                       onTradeClick={handleTradeClick}
+                      pipMult={result.results.pip_mult}
                     />
                   </div>
                 )}
@@ -195,7 +198,7 @@ export function Home() {
                     <h3 className="text-sm font-semibold text-slate-400 mb-4">
                       Trade Statistics
                     </h3>
-                    <TradeStatsTable trades={result.results.trades} />
+                    <TradeStatsTable trades={result.results.trades} pipMult={result.results.pip_mult} />
                   </div>
                 )}
               </div>

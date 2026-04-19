@@ -154,28 +154,46 @@ def get_strategies() -> list[StrategyMeta]:
 
 @router.get("/data/available", response_model=DataAvailable)
 def get_data_available() -> DataAvailable:
-    years: set[int] = set()
-    timeframes: set[str] = set()
+    # symbols: {symbol: {timeframes: [...], years: [...]}}
+    symbols: dict[str, dict] = {}
     for tf in VALID_TIMEFRAMES:
         tf_dir = DATA_DIR / tf
         if not tf_dir.exists():
             continue
         for f in tf_dir.glob("*.parquet"):
-            # filename: XAUUSD_H1_2025.parquet
+            # filename: {SYMBOL}_{TF}_{YEAR}.parquet  e.g. XAUUSD_H1_2025.parquet
             parts = f.stem.split("_")
-            if len(parts) >= 3:
-                try:
-                    years.add(int(parts[-1]))
-                    timeframes.add(tf)
-                except ValueError:
-                    pass
-    return DataAvailable(years=sorted(years), timeframes=[tf for tf in VALID_TIMEFRAMES if tf in timeframes])
+            if len(parts) < 3:
+                continue
+            try:
+                year = int(parts[-1])
+            except ValueError:
+                continue
+            # Symbol is everything before the last two segments (TF + year)
+            sym = "_".join(parts[:-2])
+            if not sym:
+                continue
+            if sym not in symbols:
+                symbols[sym] = {"timeframes": set(), "years": set()}
+            symbols[sym]["timeframes"].add(tf)
+            symbols[sym]["years"].add(year)
+
+    # Convert sets to sorted lists; preserve VALID_TIMEFRAMES order
+    result = {
+        sym: {
+            "timeframes": [tf for tf in VALID_TIMEFRAMES if tf in data["timeframes"]],
+            "years": sorted(data["years"]),
+        }
+        for sym, data in sorted(symbols.items())
+    }
+    return DataAvailable(symbols=result)
 
 
 @router.get("/ohlcv")
 def get_ohlcv(
     timeframe: str = Query(...),
     years: str = Query(..., description="Comma-separated years, e.g. 2025,2026"),
+    symbol: str = Query("XAUUSD", description="Trading pair symbol, e.g. XAUUSD"),
     date_from: str | None = Query(None, description="ISO date filter start (inclusive)"),
     date_to: str | None = Query(None, description="ISO date filter end (inclusive)"),
 ) -> list[dict]:
@@ -191,7 +209,7 @@ def get_ohlcv(
 
     frames = []
     for year in sorted(year_list):
-        path = DATA_DIR / timeframe / f"XAUUSD_{timeframe}_{year}.parquet"
+        path = DATA_DIR / timeframe / f"{symbol}_{timeframe}_{year}.parquet"
         if not path.exists():
             continue
         frames.append(pl.read_parquet(path))

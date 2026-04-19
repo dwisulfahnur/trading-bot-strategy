@@ -1,5 +1,5 @@
 """
-Convert XAUUSD raw tick CSVs (or ZIPs) to Parquet format.
+Convert raw tick CSVs (or ZIPs) to Parquet format.
 
 Produces two outputs per year:
   1. Tick-level Parquet (full fidelity, compressed)
@@ -7,8 +7,10 @@ Produces two outputs per year:
 
 Usage:
     python convert_to_parquet.py
+    python convert_to_parquet.py --symbol XAUUSD
 """
 
+import argparse
 import sys
 import time
 import zipfile
@@ -73,10 +75,10 @@ def fmt_elapsed(seconds: float) -> str:
     return f"{m}m {s}s"
 
 
-def find_source(year: int) -> tuple[Path, str]:
+def find_source(year: int, symbol: str = "XAUUSD") -> tuple[Path, str]:
     """Return (path, kind) where kind is 'csv' or 'zip'."""
-    csv = DATA_DIR / f"Exness_XAUUSD_Raw_Spread_{year}.csv"
-    zp  = DATA_DIR / f"Exness_XAUUSD_Raw_Spread_{year}.zip"
+    csv = DATA_DIR / f"Exness_{symbol}_Raw_Spread_{year}.csv"
+    zp  = DATA_DIR / f"Exness_{symbol}_Raw_Spread_{year}.zip"
     if csv.exists():
         return csv, "csv"
     if zp.exists():
@@ -84,14 +86,14 @@ def find_source(year: int) -> tuple[Path, str]:
     raise FileNotFoundError(f"No CSV or ZIP found for year {year} in {DATA_DIR}")
 
 
-def find_monthly_sources(year: int) -> list[Path]:
-    """Return sorted list of monthly zip files like Exness_XAUUSD_Raw_Spread_2025_07.zip."""
-    return sorted(DATA_DIR.glob(f"Exness_XAUUSD_Raw_Spread_{year}_??.zip"))
+def find_monthly_sources(year: int, symbol: str = "XAUUSD") -> list[Path]:
+    """Return sorted list of monthly zip files like Exness_{SYMBOL}_Raw_Spread_2025_07.zip."""
+    return sorted(DATA_DIR.glob(f"Exness_{symbol}_Raw_Spread_{year}_??.zip"))
 
 
-def find_mt5_exports() -> list[Path]:
-    """Return all MT5-format tick CSVs matching XAUUSD_*.csv in DATA_DIR."""
-    return sorted(DATA_DIR.glob("XAUUSD_*.csv"))
+def find_mt5_exports(symbol: str = "XAUUSD") -> list[Path]:
+    """Return all MT5-format tick CSVs matching {SYMBOL}_*.csv in DATA_DIR."""
+    return sorted(DATA_DIR.glob(f"{symbol}_*.csv"))
 
 
 def read_ticks(source: Path, kind: str) -> pl.LazyFrame:
@@ -145,7 +147,7 @@ def read_mt5_ticks(source: Path) -> pl.DataFrame:
     )
 
 
-def build_tick_parquet_from_mt5(exports: list[Path]) -> dict[int, Path]:
+def build_tick_parquet_from_mt5(exports: list[Path], symbol: str = "XAUUSD") -> dict[int, Path]:
     """
     Merge one or more MT5 tick export files, split by year, and write tick
     Parquets.  Existing tick Parquets for a year are merged with new data
@@ -161,7 +163,7 @@ def build_tick_parquet_from_mt5(exports: list[Path]) -> dict[int, Path]:
     result: dict[int, Path] = {}
 
     for year in sorted(years):
-        out_path = TICKS_DIR / f"XAUUSD_ticks_{year}.parquet"
+        out_path = TICKS_DIR / f"{symbol}_ticks_{year}.parquet"
         year_df = combined.filter(pl.col("timestamp").dt.year() == year)
 
         if out_path.exists():
@@ -185,14 +187,14 @@ def build_tick_parquet_from_mt5(exports: list[Path]) -> dict[int, Path]:
 # Conversion
 # ---------------------------------------------------------------------------
 
-def merge_monthly_ticks(year: int, monthly_zips: list[Path]) -> tuple[Path, bool]:
+def merge_monthly_ticks(year: int, monthly_zips: list[Path], symbol: str = "XAUUSD") -> tuple[Path, bool]:
     """
     Read monthly Exness zip files, merge with existing tick Parquet (if any),
     deduplicate by timestamp, and write the result.
 
     Returns (out_path, was_updated) — was_updated is True if new rows were added.
     """
-    out_path = TICKS_DIR / f"XAUUSD_ticks_{year}.parquet"
+    out_path = TICKS_DIR / f"{symbol}_ticks_{year}.parquet"
 
     print(f"  Merging {len(monthly_zips)} monthly zip(s) into {out_path.name} ...")
     frames: list[pl.DataFrame] = []
@@ -223,14 +225,14 @@ def merge_monthly_ticks(year: int, monthly_zips: list[Path]) -> tuple[Path, bool
     return out_path, added > 0
 
 
-def convert_ticks(year: int) -> Path:
+def convert_ticks(year: int, symbol: str = "XAUUSD") -> Path:
     """Convert raw source to tick-level Parquet. Returns output path."""
-    out_path = TICKS_DIR / f"XAUUSD_ticks_{year}.parquet"
+    out_path = TICKS_DIR / f"{symbol}_ticks_{year}.parquet"
     if out_path.exists():
         print(f"  [skip] tick Parquet already exists: {out_path.name}")
         return out_path
 
-    source, kind = find_source(year)
+    source, kind = find_source(year, symbol=symbol)
     print(f"  Reading {source.name} ({fmt_size(source)}) via {kind.upper()} ...")
     t0 = time.time()
 
@@ -241,11 +243,11 @@ def convert_ticks(year: int) -> Path:
     return out_path
 
 
-def build_ohlcv(year: int, tick_parquet: Path, tf_label: str, tf_truncate: str) -> Path:
+def build_ohlcv(year: int, tick_parquet: Path, tf_label: str, tf_truncate: str, symbol: str = "XAUUSD") -> Path:
     """Aggregate tick Parquet → OHLCV Parquet for one timeframe."""
     tf_dir = OHLCV_DIR / tf_label
     tf_dir.mkdir(parents=True, exist_ok=True)
-    out_path = tf_dir / f"XAUUSD_{tf_label}_{year}.parquet"
+    out_path = tf_dir / f"{symbol}_{tf_label}_{year}.parquet"
 
     if out_path.exists():
         print(f"    [skip] {out_path.name}")
@@ -284,31 +286,37 @@ def build_ohlcv(year: int, tick_parquet: Path, tf_label: str, tf_truncate: str) 
 # ---------------------------------------------------------------------------
 
 def main():
+    parser = argparse.ArgumentParser(description="Convert raw tick data to Parquet format.")
+    parser.add_argument("--symbol", default="XAUUSD", help="Trading pair symbol (default: XAUUSD)")
+    args = parser.parse_args()
+    symbol = args.symbol
+
     TICKS_DIR.mkdir(parents=True, exist_ok=True)
     OHLCV_DIR.mkdir(parents=True, exist_ok=True)
 
     total_start = time.time()
+    print(f"Symbol: {symbol}")
 
     # ------------------------------------------------------------------
-    # Phase 1: ingest any MT5 History Center exports (XAUUSD_*.csv)
+    # Phase 1: ingest any MT5 History Center exports ({SYMBOL}_*.csv)
     # ------------------------------------------------------------------
-    mt5_exports = find_mt5_exports()
+    mt5_exports = find_mt5_exports(symbol=symbol)
     mt5_years: set[int] = set()
     if mt5_exports:
         print(f"\nFound {len(mt5_exports)} MT5 export file(s):")
         for p in mt5_exports:
             print(f"  {p.name}")
-        mt5_tick_paths = build_tick_parquet_from_mt5(mt5_exports)
+        mt5_tick_paths = build_tick_parquet_from_mt5(mt5_exports, symbol=symbol)
         mt5_years = set(mt5_tick_paths.keys())
         # Rebuild OHLCV for affected years
         for year, tick_parquet in mt5_tick_paths.items():
             print(f"\n  Rebuilding OHLCV for year {year} ...")
             for tf_label, tf_truncate in TIMEFRAMES.items():
                 # Delete stale OHLCV so it gets rebuilt
-                stale = OHLCV_DIR / tf_label / f"XAUUSD_{tf_label}_{year}.parquet"
+                stale = OHLCV_DIR / tf_label / f"{symbol}_{tf_label}_{year}.parquet"
                 if stale.exists():
                     stale.unlink()
-                build_ohlcv(year, tick_parquet, tf_label, tf_truncate)
+                build_ohlcv(year, tick_parquet, tf_label, tf_truncate, symbol=symbol)
 
     # ------------------------------------------------------------------
     # Phase 2: process Exness CSV/ZIP sources for remaining years
@@ -322,26 +330,26 @@ def main():
         print(f"{'='*60}")
 
         # Check for monthly zip supplements (e.g. 2025_07.zip … 2025_12.zip)
-        monthly_zips = find_monthly_sources(year)
+        monthly_zips = find_monthly_sources(year, symbol=symbol)
 
         try:
             if monthly_zips:
-                tick_parquet, updated = merge_monthly_ticks(year, monthly_zips)
+                tick_parquet, updated = merge_monthly_ticks(year, monthly_zips, symbol=symbol)
                 if not updated:
                     print(f"  [skip] no new ticks found in monthly zips — OHLCV unchanged")
                     continue
                 # Rebuild OHLCV since tick data changed
                 print(f"  Rebuilding OHLCV bars ...")
                 for tf_label, tf_truncate in TIMEFRAMES.items():
-                    stale = OHLCV_DIR / tf_label / f"XAUUSD_{tf_label}_{year}.parquet"
+                    stale = OHLCV_DIR / tf_label / f"{symbol}_{tf_label}_{year}.parquet"
                     if stale.exists():
                         stale.unlink()
-                    build_ohlcv(year, tick_parquet, tf_label, tf_truncate)
+                    build_ohlcv(year, tick_parquet, tf_label, tf_truncate, symbol=symbol)
             else:
-                tick_parquet = convert_ticks(year)
+                tick_parquet = convert_ticks(year, symbol=symbol)
                 print(f"  Aggregating OHLCV bars ...")
                 for tf_label, tf_truncate in TIMEFRAMES.items():
-                    build_ohlcv(year, tick_parquet, tf_label, tf_truncate)
+                    build_ohlcv(year, tick_parquet, tf_label, tf_truncate, symbol=symbol)
         except FileNotFoundError as e:
             print(f"  [WARN] {e}")
             continue

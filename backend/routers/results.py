@@ -30,6 +30,7 @@ def _to_summary(result_id: str, data: dict) -> ResultSummary:
         id=result_id,
         created_at=data.get("created_at", ""),
         strategy=data.get("strategy", ""),
+        symbol=data.get("symbol", params.get("symbol", "XAUUSD")),
         timeframe=params.get("timeframe", ""),
         years=years,
         total_return_pct=r.get("total_return_pct", 0.0),

@@ -1,10 +1,11 @@
 """
-Backtest runner for XAUUSD strategies.
+Backtest runner for OHLCV strategies.
 
 Usage
 -----
 python backtest.py --strategy william_fractals --years 2025 2026 --timeframe H1
 python backtest.py --strategy william_fractals --years 2025 2026 --timeframe H1 --fractal_period 9
+python backtest.py --symbol XAUUSD --strategy william_fractals --years 2025 --timeframe H1
 python backtest.py --help
 """
 
@@ -26,6 +27,33 @@ DATA_DIR   = Path(__file__).parent / "data" / "parquet" / "ohlcv"
 TICKS_DIR  = Path(__file__).parent / "data" / "parquet" / "ticks"
 RESULT_DIR = Path(__file__).parent / "result"
 VALID_TIMEFRAMES = ["M1", "M5", "M15", "H1", "H4"]
+
+# Per-pair instrument specs.  Add new pairs here when data becomes available.
+# contract_size : units per standard lot (affects lot size calculation)
+# pip_mult      : multiplier to convert raw price diff → pip display value
+#                 USD-quoted 4-decimal (EURUSD, GBPUSD): 10_000
+#                 JPY-quoted 2-decimal (EURJPY, GBPJPY, CHFJPY, USDJPY, AUDJPY, CADJPY): 100
+#                 GBP-quoted 4-decimal (EURGBP): 10_000
+#                 XAUUSD (oz): 10
+# NOTE: For non-USD-quoted pairs (JPY, GBP crosses), profit_usd is in the
+#       quote currency, not USD — it is approximate. Future work: add a
+#       quote_to_usd_rate conversion field.
+PAIR_CONFIG: dict[str, dict] = {
+    # Metals
+    "XAUUSD": {"contract_size": 100,     "pip_mult": 10.0},
+    # USD-quoted forex
+    "EURUSD": {"contract_size": 100_000, "pip_mult": 10_000.0},
+    "GBPUSD": {"contract_size": 100_000, "pip_mult": 10_000.0},
+    # JPY-quoted forex
+    "EURJPY": {"contract_size": 100_000, "pip_mult": 100.0},
+    "GBPJPY": {"contract_size": 100_000, "pip_mult": 100.0},
+    "CHFJPY": {"contract_size": 100_000, "pip_mult": 100.0},
+    "USDJPY": {"contract_size": 100_000, "pip_mult": 100.0},
+    "AUDJPY": {"contract_size": 100_000, "pip_mult": 100.0},
+    "CADJPY": {"contract_size": 100_000, "pip_mult": 100.0},
+    # GBP-quoted forex
+    "EURGBP": {"contract_size": 100_000, "pip_mult": 10_000.0},
+}
 
 
 # ---------------------------------------------------------------------------
@@ -53,10 +81,10 @@ class Trade:
 # Data loading
 # ---------------------------------------------------------------------------
 
-def load_data(years: list[int], timeframe: str) -> pl.DataFrame:
+def load_data(years: list[int], timeframe: str, symbol: str = "XAUUSD") -> pl.DataFrame:
     frames = []
     for year in sorted(years):
-        path = DATA_DIR / timeframe / f"XAUUSD_{timeframe}_{year}.parquet"
+        path = DATA_DIR / timeframe / f"{symbol}_{timeframe}_{year}.parquet"
         if not path.exists():
             print(f"[WARN] Missing: {path} — skipping year {year}")
             continue
@@ -68,14 +96,14 @@ def load_data(years: list[int], timeframe: str) -> pl.DataFrame:
     return pl.concat(frames).sort("time")
 
 
-def load_tick_data(years: list[int]) -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
+def load_tick_data(years: list[int], symbol: str = "XAUUSD") -> tuple[np.ndarray, np.ndarray, np.ndarray] | None:
     """
     Load tick data for the given years.
     Returns (timestamps_ms, bids, asks) as int64/float64 numpy arrays, or None if no data.
     """
     frames = []
     for year in sorted(years):
-        path = TICKS_DIR / f"XAUUSD_ticks_{year}.parquet"
+        path = TICKS_DIR / f"{symbol}_ticks_{year}.parquet"
         if not path.exists():
             print(f"[WARN] Missing tick data: {path} — year {year} will fall back to OHLCV resolution")
             continue
@@ -170,12 +198,15 @@ def _resolve_position_ticks(
     position: "Trade",
     bar_bids: np.ndarray,
     breakeven_r: float | None,
+    breakeven_sl_r: float = 0.0,
 ) -> str | None:
     """
     Replay bid ticks for one bar to determine the exit event for an open position.
     Handles break-even SL migration mid-bar correctly (two-phase approach).
     Mutates position.sl and position._be_active if break-even activates this bar.
     Returns 'tp', 'sl', or None (position still open at end of bar).
+
+    breakeven_sl_r: R level the SL is moved to when BE fires (0.0 = entry, 0.5 = +0.5R).
     """
     direction = position.direction
     tp        = position.tp
@@ -189,16 +220,18 @@ def _resolve_position_ticks(
             be_idxs = np.where(bar_bids <= be_trigger)[0]
 
         if len(be_idxs):
-            be_idx = int(be_idxs[0])
+            be_idx    = int(be_idxs[0])
+            # New SL level: entry ± initial_sl_dist × breakeven_sl_r
+            new_be_sl = position.entry_price + position._initial_sl_dist * breakeven_sl_r * direction
             # Phase 1: ticks before BE fires — use original SL
             result = _check_sl_tp(direction, bar_bids[:be_idx], position.sl, tp)
             if result is not None:
                 return result
-            # BE activates — migrate SL to entry price
-            position.sl         = position.entry_price
+            # BE activates — migrate SL to locked level
+            position.sl         = new_be_sl
             position._be_active = True
             # Phase 2: from BE tick onward — use new SL
-            return _check_sl_tp(direction, bar_bids[be_idx:], position.entry_price, tp)
+            return _check_sl_tp(direction, bar_bids[be_idx:], new_be_sl, tp)
 
     # No BE transition this bar — single-phase check
     return _check_sl_tp(direction, bar_bids, position.sl, tp)
@@ -212,6 +245,7 @@ def simulate(
     df: pl.DataFrame,
     tick_data: tuple[np.ndarray, np.ndarray, np.ndarray] | None = None,
     breakeven_r: float | None = None,
+    breakeven_sl_r: float = 0.0,
     max_pending_bars: int | None = None,
     max_sl_per_period: int | None = None,
     sl_period: str = "none",
@@ -228,7 +262,8 @@ def simulate(
     Without tick_data the engine falls back to OHLCV bar heuristics (candle
     direction to break same-bar SL/TP ties) — identical to the legacy behaviour.
 
-    breakeven_r:      move SL to entry price when profit reaches this many R.
+    breakeven_r:      trigger R at which the SL is moved (e.g. 1.0 = move when up 1R).
+    breakeven_sl_r:   R level the SL is moved to (0.0 = entry, 0.5 = lock in 0.5R profit).
     max_pending_bars: cancel limit orders that have not filled after this many bars.
 
     One-trade-per-fractal rule: once a fractal level triggers an entry that same
@@ -379,7 +414,7 @@ def simulate(
         if position is not None:
             if has_ticks:
                 # Tick-level resolution: exact SL/TP ordering, correct BE sequencing
-                exit_reason = _resolve_position_ticks(position, bar_bids, breakeven_r)
+                exit_reason = _resolve_position_ticks(position, bar_bids, breakeven_r, breakeven_sl_r)
                 hit_tp = exit_reason == "tp"
                 hit_sl = exit_reason == "sl"
             else:
@@ -388,12 +423,12 @@ def simulate(
                     if position.direction == 1:
                         be_trigger = position.entry_price + position._initial_sl_dist * breakeven_r
                         if bar["high"] >= be_trigger:
-                            position.sl = position.entry_price
+                            position.sl = position.entry_price + position._initial_sl_dist * breakeven_sl_r
                             position._be_active = True
                     else:
                         be_trigger = position.entry_price - position._initial_sl_dist * breakeven_r
                         if bar["low"] <= be_trigger:
-                            position.sl = position.entry_price
+                            position.sl = position.entry_price - position._initial_sl_dist * breakeven_sl_r
                             position._be_active = True
 
                 if position.direction == 1:
@@ -423,9 +458,9 @@ def simulate(
             elif hit_sl:
                 position.exit_time  = bar["time"]
                 if position._be_active:
-                    position.exit_price  = position.entry_price
+                    position.exit_price  = position.sl   # the locked SL level (entry ± breakeven_sl_r × dist)
                     position.exit_reason = "be"
-                    position.pnl_r       = 0.0
+                    position.pnl_r       = breakeven_sl_r
                 else:
                     position.exit_price  = position.sl
                     position.exit_reason = "sl"
@@ -471,7 +506,7 @@ def simulate(
 # Metrics
 # ---------------------------------------------------------------------------
 
-def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float, compound: bool = True, commission_per_lot: float = 3.5) -> dict:
+def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float, compound: bool = True, commission_per_lot: float = 3.5, symbol: str = "XAUUSD") -> dict:
     if not trades:
         return {}
 
@@ -486,7 +521,10 @@ def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float
 
     for i, t in enumerate(trades):
         risk_at_entry  = capital * risk_pct if compound else risk_amount
-        lot_size       = round(risk_at_entry / t._initial_sl_dist / 100, 2) if t._initial_sl_dist > 0 else 0.0
+        if symbol not in PAIR_CONFIG:
+            raise ValueError(f"Symbol '{symbol}' not found in PAIR_CONFIG. Add it to backtest.py before running.")
+        contract_size  = PAIR_CONFIG[symbol]["contract_size"]
+        lot_size       = round(risk_at_entry / t._initial_sl_dist / contract_size, 2) if t._initial_sl_dist > 0 else 0.0
         commission_usd = round(lot_size * commission_per_lot * 2, 2)  # round-trip (entry + exit)
         profit_usd     = round(risk_at_entry * t.pnl_r - commission_usd, 2)
         capital        = max(0.0, round(capital + profit_usd, 2))
@@ -566,6 +604,7 @@ def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float
             "return_pct":   round(sum(t.pnl_r for t in yt) * risk_pct * 100, 4),
         }
 
+    pair_cfg = PAIR_CONFIG[symbol]
     return {
         "total_trades":       len(executed),
         "win_rate_pct":       win_rate,
@@ -581,6 +620,9 @@ def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float
         "max_consec_wins":    max_consec_wins,
         "max_consec_losses":  max_consec_losses,
         "stopped_out":        stopped_out,
+        "symbol":             symbol,
+        "contract_size":      pair_cfg["contract_size"],
+        "pip_mult":           pair_cfg["pip_mult"],
         "per_year":           per_year,
         "equity_curve":       equity_curve,
         "trades":             trade_log,
@@ -626,6 +668,7 @@ def save_result(
     strategy_params: dict,
     timeframe: str,
     years: list[int],
+    symbol: str = "XAUUSD",
 ) -> Path:
     RESULT_DIR.mkdir(exist_ok=True)
 
@@ -652,14 +695,14 @@ def save_result(
         and not (k.startswith("mc_") and not mc_active)
     }
     param_tag = "_".join(f"{k}{v}" for k, v in included_params.items())
-    filename  = f"{strategy_name}_{timeframe}_{year_tag}_{param_tag}.json"
+    filename  = f"{symbol}_{strategy_name}_{timeframe}_{year_tag}_{param_tag}.json"
 
     # OS filename limit is 255 bytes. If we'd exceed a safe threshold, truncate
     # param_tag and append an 8-char hash of the full param string for uniqueness.
     _MAX_FILENAME = 200
     if len(filename) > _MAX_FILENAME:
         _hash     = hashlib.md5(param_tag.encode()).hexdigest()[:8]
-        _prefix   = f"{strategy_name}_{timeframe}_{year_tag}_"
+        _prefix   = f"{symbol}_{strategy_name}_{timeframe}_{year_tag}_"
         _reserved = len(_prefix) + 1 + len(_hash) + len(".json")  # +1 for "_" separator
         param_tag = param_tag[:_MAX_FILENAME - _reserved]
         filename  = f"{_prefix}{param_tag}_{_hash}.json"
@@ -669,15 +712,18 @@ def save_result(
     payload = {
         "created_at": datetime.now(timezone.utc).isoformat(),
         "strategy":   strategy_name,
+        "symbol":     symbol,
         "parameters": {
             **strategy_params,
             "timeframe":         timeframe,
             "years":             years,
+            "symbol":            symbol,
             "initial_capital":   metrics.get("initial_capital"),
             "risk_pct":          metrics.get("risk_pct"),
             "compound":          metrics.get("compound", True),
             "commission_per_lot": metrics.get("commission_per_lot", 3.5),
-            "breakeven_r":       metrics.get("breakeven_r"),
+            "breakeven_r":        metrics.get("breakeven_r"),
+            "breakeven_sl_r":     metrics.get("breakeven_sl_r", 0.0),
         },
         "results": metrics,
     }
@@ -694,9 +740,11 @@ def save_result(
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Backtest a strategy on XAUUSD OHLCV data.",
+        description="Backtest a strategy on OHLCV data.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
+    p.add_argument("--symbol",         default="XAUUSD",
+                   help=f"Trading pair symbol. Configured pairs: {list(PAIR_CONFIG.keys())}")
     p.add_argument("--strategy",       default="william_fractals",
                    help="Strategy module name inside strategies/")
     p.add_argument("--years",          nargs="+", type=int, default=[2025, 2026],
@@ -718,7 +766,9 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--no_compound",    action="store_true",
                    help="Use fixed risk amount (non-compounding) instead of % of current capital")
     p.add_argument("--breakeven_r",    type=float, default=None,
-                   help="Move SL to entry when profit reaches this R multiple (e.g. 1.0, 0.5, 1.3). Omit to disable.")
+                   help="Trigger: move SL when profit reaches this R multiple (e.g. 1.0). Omit to disable.")
+    p.add_argument("--breakeven_sl_r", type=float, default=0.0,
+                   help="Lock SL at this R level when break-even fires (0.0 = entry, 0.5 = lock in 0.5R profit).")
     p.add_argument("--commission",     type=float, default=3.5,
                    help="Commission charged per lot round-trip in USD (default: 3.5)")
 
@@ -766,9 +816,11 @@ def main() -> None:
     # Prepend the previous year as EMA warmup so that by the first bar of the
     # test period the indicator has converged to match MT5's fully-seeded value.
     # If the warmup year file is missing the loader prints a warning and skips it.
+    symbol = args.symbol
     warmup_year = min(args.years) - 1
+    print(f"Symbol        : {symbol}")
     print(f"Loading data  : {args.timeframe} | years {args.years}  (+{warmup_year} EMA warmup)")
-    df = load_data([warmup_year] + sorted(args.years), args.timeframe)
+    df = load_data([warmup_year] + sorted(args.years), args.timeframe, symbol=symbol)
     print(f"  {len(df):,} bars loaded")
 
     print(f"Strategy      : {args.strategy}  params={strategy_params}")
@@ -788,23 +840,25 @@ def main() -> None:
     print(f"  {(df['signal'] != 0).sum()} signals found")
 
     print("Loading tick data ...")
-    tick_data = load_tick_data([warmup_year] + sorted(args.years))
+    tick_data = load_tick_data([warmup_year] + sorted(args.years), symbol=symbol)
     if tick_data is not None:
         print(f"  {len(tick_data[0]):,} ticks loaded")
 
     print("Simulating trades ...")
-    breakeven_r = args.breakeven_r
+    breakeven_r    = args.breakeven_r
+    breakeven_sl_r = args.breakeven_sl_r if breakeven_r is not None else 0.0
     max_pending_bars = args.max_pending_bars if args.strategy == "momentum_candle" else None
-    trades = simulate(df, tick_data=tick_data, breakeven_r=breakeven_r, max_pending_bars=max_pending_bars)
+    trades = simulate(df, tick_data=tick_data, breakeven_r=breakeven_r, breakeven_sl_r=breakeven_sl_r, max_pending_bars=max_pending_bars)
     print(f"  {len(trades)} trades executed")
 
     compound = not args.no_compound
-    metrics = compute_metrics(trades, args.capital, args.risk, compound=compound, commission_per_lot=args.commission)
-    metrics["compound"] = compound
-    metrics["breakeven_r"] = breakeven_r
+    metrics = compute_metrics(trades, args.capital, args.risk, compound=compound, commission_per_lot=args.commission, symbol=symbol)
+    metrics["compound"]       = compound
+    metrics["breakeven_r"]    = breakeven_r
+    metrics["breakeven_sl_r"] = breakeven_sl_r
     print_report(metrics, strategy.name, args.timeframe, args.years)
 
-    out_path = save_result(metrics, strategy.name, strategy_params, args.timeframe, args.years)
+    out_path = save_result(metrics, strategy.name, strategy_params, args.timeframe, args.years, symbol=symbol)
     print(f"Result saved  : {out_path.relative_to(Path(__file__).parent)}")
 
 
