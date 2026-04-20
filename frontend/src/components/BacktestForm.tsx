@@ -479,7 +479,7 @@ export function BacktestForm({ onResult }: Props) {
         await new Promise((r) => setTimeout(r, 1000));
         const status = await api.getJobStatus(jobId);
         if (status.status === 'done' && status.result_id) {
-          const result = await api.getResult(status.result_id);
+          const result = await api.getUnsavedResult(status.result_id);
           setLoading(false);
           onResult(result);
           return;

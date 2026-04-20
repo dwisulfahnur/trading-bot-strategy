@@ -1,5 +1,5 @@
 """
-FastAPI entry point for the XAUUSD Backtest Web Application.
+FastAPI entry point for the Strategy Backtest Web Application.
 
 Dev startup:
     uvicorn backend.main:app --reload --port 8000
@@ -14,8 +14,9 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 
 from backend.routers import backtest, results, data, ea
+from backend.routers import auth
 
-app = FastAPI(title="XAUUSD Backtest API", version="1.0.0")
+app = FastAPI(title="Strategy Backtest API", version="1.0.0")
 
 # ---------------------------------------------------------------------------
 # CORS — allow the Vite dev server
@@ -30,6 +31,7 @@ app.add_middleware(
 # ---------------------------------------------------------------------------
 # Routers
 # ---------------------------------------------------------------------------
+app.include_router(auth.router)
 app.include_router(backtest.router)
 app.include_router(results.router)
 app.include_router(data.router)

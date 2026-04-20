@@ -1,36 +1,85 @@
 """
 Result management endpoints:
+  POST   /results/save
   GET    /results
   GET    /results/{id}
   DELETE /results/{id}
+  DELETE /results         (bulk)
 """
 
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
-from backend.models import BacktestResult, ResultSummary
-
-router = APIRouter(prefix="/results")
+from backend.auth import get_current_user
+from backend.db import get_results
+from backend.models import BacktestResult, ResultSummary, SaveResultRequest
 
 RESULT_DIR = Path(__file__).parent.parent.parent / "result"
 
+router = APIRouter(prefix="/results")
 
-def _load_result(path: Path) -> dict:
+# Fields excluded from listing to keep payloads small
+_LIST_PROJECTION = {"results.trades": 0, "results.equity_curve": 0}
+
+
+@router.post("/save", response_model=BacktestResult)
+def save_result(
+    req: SaveResultRequest, user_id: str = Depends(get_current_user)
+) -> BacktestResult:
+    """Explicitly save a completed backtest result with a user-given name."""
+    name = req.name.strip()
+    if not name:
+        raise HTTPException(400, "Name cannot be empty")
+
+    path = RESULT_DIR / f"{req.result_id}.json"
+    if not path.exists():
+        raise HTTPException(404, f"Result '{req.result_id}' not found on disk")
+
     with open(path) as f:
-        return json.load(f)
+        data = json.load(f)
 
-
-def _to_summary(result_id: str, data: dict) -> ResultSummary:
-    r = data.get("results", {})
     params = data.get("parameters", {})
+    metrics = data.get("results", {})
+
+    doc = {
+        "_id": req.result_id,
+        "user_id": user_id,
+        "name": name,
+        "strategy": data.get("strategy", ""),
+        "created_at": data.get("created_at", datetime.now(timezone.utc).isoformat()),
+        "symbol": data.get("symbol", params.get("symbol", "XAUUSD")),
+        "parameters": params,
+        "results": metrics,
+    }
+    col = get_results()
+    existing = col.find_one({"_id": req.result_id})
+    if existing and existing.get("user_id") != user_id:
+        raise HTTPException(403, "Result belongs to another user")
+    col.replace_one({"_id": req.result_id}, doc, upsert=True)
+
+    return BacktestResult(
+        id=req.result_id,
+        name=name,
+        created_at=doc["created_at"],
+        strategy=doc["strategy"],
+        parameters=params,
+        results=metrics,
+    )
+
+
+def _doc_to_summary(doc: dict) -> ResultSummary:
+    r = doc.get("results", {})
+    params = doc.get("parameters", {})
     years = params.get("years", [])
     return ResultSummary(
-        id=result_id,
-        created_at=data.get("created_at", ""),
-        strategy=data.get("strategy", ""),
-        symbol=data.get("symbol", params.get("symbol", "XAUUSD")),
+        id=doc["_id"],
+        name=doc.get("name"),
+        created_at=doc.get("created_at", ""),
+        strategy=doc.get("strategy", ""),
+        symbol=doc.get("symbol", params.get("symbol", "XAUUSD")),
         timeframe=params.get("timeframe", ""),
         years=years,
         total_return_pct=r.get("total_return_pct", 0.0),
@@ -43,50 +92,50 @@ def _to_summary(result_id: str, data: dict) -> ResultSummary:
 
 
 @router.get("", response_model=list[ResultSummary])
-def list_results() -> list[ResultSummary]:
-    if not RESULT_DIR.exists():
-        return []
+def list_results(user_id: str = Depends(get_current_user)) -> list[ResultSummary]:
+    col = get_results()
+    docs = col.find({"user_id": user_id}, _LIST_PROJECTION).sort("created_at", -1)
     summaries = []
-    for path in sorted(RESULT_DIR.glob("*.json"), key=lambda p: p.stat().st_mtime, reverse=True):
+    for doc in docs:
         try:
-            data = _load_result(path)
-            summaries.append(_to_summary(path.stem, data))
+            summaries.append(_doc_to_summary(doc))
         except Exception:
             continue
     return summaries
 
 
 @router.get("/{result_id}", response_model=BacktestResult)
-def get_result(result_id: str) -> BacktestResult:
-    path = RESULT_DIR / f"{result_id}.json"
-    if not path.exists():
+def get_result(
+    result_id: str, user_id: str = Depends(get_current_user)
+) -> BacktestResult:
+    col = get_results()
+    doc = col.find_one({"_id": result_id, "user_id": user_id})
+    if not doc:
         raise HTTPException(404, f"Result '{result_id}' not found")
-    data = _load_result(path)
     return BacktestResult(
-        id=result_id,
-        created_at=data.get("created_at", ""),
-        strategy=data.get("strategy", ""),
-        parameters=data.get("parameters", {}),
-        results=data.get("results", {}),
+        id=doc["_id"],
+        name=doc.get("name"),
+        created_at=doc.get("created_at", ""),
+        strategy=doc.get("strategy", ""),
+        parameters=doc.get("parameters", {}),
+        results=doc.get("results", {}),
     )
 
 
 @router.delete("/{result_id}")
-def delete_result(result_id: str) -> dict:
-    path = RESULT_DIR / f"{result_id}.json"
-    if not path.exists():
+def delete_result(
+    result_id: str, user_id: str = Depends(get_current_user)
+) -> dict:
+    col = get_results()
+    res = col.delete_one({"_id": result_id, "user_id": user_id})
+    if res.deleted_count == 0:
         raise HTTPException(404, f"Result '{result_id}' not found")
-    path.unlink()
     return {"deleted": result_id}
 
 
 @router.delete("")
-def delete_results(ids: list[str]) -> dict:
-    """Delete multiple results by ID. Silently skips missing files."""
-    deleted = []
-    for result_id in ids:
-        path = RESULT_DIR / f"{result_id}.json"
-        if path.exists():
-            path.unlink()
-            deleted.append(result_id)
-    return {"deleted": deleted}
+def delete_results(ids: list[str], user_id: str = Depends(get_current_user)) -> dict:
+    """Bulk delete — silently skips IDs that don't belong to the user."""
+    col = get_results()
+    res = col.delete_many({"_id": {"$in": ids}, "user_id": user_id})
+    return {"deleted": res.deleted_count}

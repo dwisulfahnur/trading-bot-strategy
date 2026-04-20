@@ -1,4 +1,5 @@
 import { useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { BacktestForm } from '../components/BacktestForm';
 import { ResultCard } from '../components/ResultCard';
@@ -10,13 +11,53 @@ import { TradeStatsTable } from '../components/TradeStatsTable';
 import { PipCurve } from '../components/PipCurve';
 import { EAModal } from '../components/EAModal';
 import { api } from '../api/client';
+import { useAuth } from '../contexts/AuthContext';
 import type { BacktestResult, OhlcvBar } from '../api/types';
 
 export function Home() {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [highlightedTrade, setHighlightedTrade] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<'equity' | 'price' | 'trades' | 'stats'>('equity');
   const [showEAModal, setShowEAModal] = useState(false);
+
+  // Save state
+  const [saveName, setSaveName] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [saveError, setSaveError] = useState('');
+  const [savedId, setSavedId] = useState<string | null>(null);
+
+  function handleLogout() {
+    logout();
+    navigate('/login');
+  }
+
+  function handleNewResult(r: BacktestResult) {
+    setResult(r);
+    setHighlightedTrade(null);
+    setActiveTab('equity');
+    setSaveName('');
+    setSaveError('');
+    setSavedId(null);
+  }
+
+  async function handleSave() {
+    if (!result || !saveName.trim()) return;
+    setSaving(true);
+    setSaveError('');
+    try {
+      await api.saveResult(result.id, saveName.trim());
+      setSavedId(result.id);
+    } catch (err: unknown) {
+      const msg =
+        (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
+        'Failed to save';
+      setSaveError(msg);
+    } finally {
+      setSaving(false);
+    }
+  }
 
   // Fetch OHLCV only when we have a result
   const { data: bars = [] } = useQuery<OhlcvBar[]>({
@@ -55,9 +96,20 @@ export function Home() {
           </div>
           <span className="font-semibold text-lg text-slate-100">Strategy Backtest</span>
         </div>
-        <a href="/results" className="text-sm text-slate-400 hover:text-slate-200 transition-colors">
-          Saved Results →
-        </a>
+        <div className="flex items-center gap-4">
+          <a href="/results" className="text-sm text-slate-400 hover:text-slate-200 transition-colors">
+            Saved Results →
+          </a>
+          <div className="flex items-center gap-2 border-l border-slate-800 pl-4">
+            <span className="text-xs text-slate-500 hidden sm:block">{user?.email}</span>
+            <button
+              onClick={handleLogout}
+              className="text-xs text-slate-400 hover:text-red-400 transition-colors"
+            >
+              Sign out
+            </button>
+          </div>
+        </div>
       </header>
 
       <div className="flex flex-col lg:flex-row min-h-[calc(100vh-65px)]">
@@ -66,7 +118,7 @@ export function Home() {
           <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wide mb-6">
             Configure Backtest
           </h2>
-          <BacktestForm onResult={(r) => { setResult(r); setHighlightedTrade(null); setActiveTab('equity'); }} />
+          <BacktestForm onResult={handleNewResult} />
         </aside>
 
         {/* Right panel — results */}
@@ -106,6 +158,47 @@ export function Home() {
                   Generate EA
                 </button>
               </div>
+
+              {/* Save banner */}
+              {savedId === result.id ? (
+                <div className="flex items-center gap-2 bg-emerald-900/30 border border-emerald-700/50 rounded-xl px-4 py-3">
+                  <svg className="w-4 h-4 text-emerald-400 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
+                  </svg>
+                  <span className="text-sm text-emerald-300">
+                    Saved as <span className="font-semibold">"{saveName}"</span>
+                  </span>
+                  <a href="/results" className="ml-auto text-xs text-emerald-400 hover:text-emerald-300 transition-colors">
+                    View in Saved Results →
+                  </a>
+                </div>
+              ) : (
+                <div className="flex items-center gap-3 bg-amber-950/30 border border-amber-700/40 rounded-xl px-4 py-3">
+                  <svg className="w-4 h-4 text-amber-500 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2}
+                      d="M12 9v2m0 4h.01M12 3a9 9 0 100 18A9 9 0 0012 3z" />
+                  </svg>
+                  <span className="text-xs text-amber-400/80 hidden sm:block">Unsaved</span>
+                  <input
+                    type="text"
+                    value={saveName}
+                    onChange={(e) => setSaveName(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleSave()}
+                    placeholder="Enter a name to save this result…"
+                    className="flex-1 bg-slate-800 border border-slate-700 rounded-lg px-3 py-1.5 text-sm text-slate-100 placeholder-slate-500 focus:outline-none focus:border-amber-500 transition-colors"
+                  />
+                  {saveError && (
+                    <span className="text-xs text-red-400 flex-shrink-0">{saveError}</span>
+                  )}
+                  <button
+                    onClick={handleSave}
+                    disabled={saving || !saveName.trim()}
+                    className="flex-shrink-0 px-4 py-1.5 bg-amber-500 hover:bg-amber-400 disabled:opacity-40 disabled:cursor-not-allowed text-slate-950 font-semibold text-xs rounded-lg transition-colors"
+                  >
+                    {saving ? 'Saving…' : 'Save'}
+                  </button>
+                </div>
+              )}
 
               {/* Metrics */}
               <ResultCard results={result.results} stoppedOut={result.results.stopped_out} />

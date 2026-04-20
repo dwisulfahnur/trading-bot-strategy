@@ -1,3 +1,16 @@
+// Auth
+export interface TokenResponse {
+  access_token: string;
+  token_type: string;
+  user_id: string;
+  email: string;
+}
+
+export interface AuthUser {
+  user_id: string;
+  email: string;
+}
+
 export interface ParameterSpec {
   name: string;
   type: 'int' | 'float' | 'bool' | 'str';
@@ -48,6 +61,7 @@ export interface JobStatus {
 
 export interface ResultSummary {
   id: string;
+  name?: string;
   created_at: string;
   strategy: string;
   symbol?: string;
@@ -112,6 +126,7 @@ export interface BacktestResults {
 
 export interface BacktestResult {
   id: string;
+  name?: string;
   created_at: string;
   strategy: string;
   parameters: Record<string, unknown>;

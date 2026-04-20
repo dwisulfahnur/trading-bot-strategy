@@ -1,9 +1,11 @@
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
+import { useNavigate } from 'react-router-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import Select from 'react-select';
 import { ComparePanel } from '../components/ComparePanel';
 import { api } from '../api/client';
+import { useAuth } from '../contexts/AuthContext';
 import type { ResultSummary } from '../api/types';
 
 type SortKey = 'created_at' | 'total_return_pct' | 'win_rate_pct' | 'max_drawdown_pct' | 'profit_factor' | 'total_trades';
@@ -16,7 +18,14 @@ const COLUMN_TIPS: Partial<Record<string, string>> = {
 };
 
 export function Results() {
+  const { user, logout } = useAuth();
+  const navigate = useNavigate();
   const queryClient = useQueryClient();
+
+  function handleLogout() {
+    logout();
+    navigate('/login');
+  }
   const [sortKey, setSortKey] = useState<SortKey>('created_at');
   const [sortAsc, setSortAsc] = useState(false);
   const [compareIds, setCompareIds] = useState<Set<string>>(new Set());
@@ -143,9 +152,20 @@ export function Results() {
           <span className="text-slate-600">/</span>
           <span className="text-slate-400">Saved Results</span>
         </div>
-        <a href="/" className="text-sm text-blue-400 hover:text-blue-300 transition-colors">
-          ← New Backtest
-        </a>
+        <div className="flex items-center gap-4">
+          <a href="/" className="text-sm text-blue-400 hover:text-blue-300 transition-colors">
+            ← New Backtest
+          </a>
+          <div className="flex items-center gap-2 border-l border-slate-800 pl-4">
+            <span className="text-xs text-slate-500 hidden sm:block">{user?.email}</span>
+            <button
+              onClick={handleLogout}
+              className="text-xs text-slate-400 hover:text-red-400 transition-colors"
+            >
+              Sign out
+            </button>
+          </div>
+        </div>
       </header>
 
       <div className="max-w-7xl mx-auto px-6 py-8 space-y-6">
@@ -164,7 +184,7 @@ export function Results() {
               <span className="text-sm font-medium text-slate-300">Filters</span>
               {hasActiveFilters && (
                 <button
-                  onClick={() => { setFilterTf([]); setFilterYears([]); setFilterStrategies([]); setFilterRisk([]); setDdMin(''); setDdMax(''); setWrMin(''); setWrMax(''); setRetMin(''); setRetMax(''); }}
+                  onClick={() => { setFilterTf([]); setFilterYears([]); setFilterStrategies([]); setFilterRisk([]); setDdMin(''); setDdMax(''); setWrMin(''); setWrMax('');  }}
                   className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
                 >
                   Clear all
@@ -404,7 +424,7 @@ export function Results() {
             <div className="flex flex-col items-center justify-center py-12 text-slate-600 gap-2">
               <p className="text-sm">No results match the current filters.</p>
               <button
-                onClick={() => { setFilterTf([]); setFilterYears([]); setFilterStrategies([]); setFilterRisk([]); setDdMin(''); setDdMax(''); setWrMin(''); setWrMax(''); setRetMin(''); setRetMax(''); }}
+                onClick={() => { setFilterTf([]); setFilterYears([]); setFilterStrategies([]); setFilterRisk([]); setDdMin(''); setDdMax(''); setWrMin(''); setWrMax('');  }}
                 className="text-blue-400 hover:text-blue-300 text-xs"
               >
                 Clear filters
@@ -476,8 +496,15 @@ export function Results() {
                             className="w-4 h-4 accent-blue-500"
                           />
                         </td>
-                        <td className="px-4 py-3 text-slate-200 font-medium">
-                          {r.strategy.replace(/_/g, ' ')}
+                        <td className="px-4 py-3">
+                          {r.name ? (
+                            <div>
+                              <span className="text-slate-100 font-medium">{r.name}</span>
+                              <span className="block text-xs text-slate-500 mt-0.5">{r.strategy.replace(/_/g, ' ')}</span>
+                            </div>
+                          ) : (
+                            <span className="text-slate-200 font-medium">{r.strategy.replace(/_/g, ' ')}</span>
+                          )}
                         </td>
                         <td className="px-4 py-3 text-slate-400">{r.timeframe}</td>
                         <td className="px-4 py-3 text-slate-400">{r.years.join(', ')}</td>

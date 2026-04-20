@@ -84,6 +84,7 @@ class PerYearStats(BaseModel):
 
 class ResultSummary(BaseModel):
     id: str
+    name: str | None = None
     created_at: str
     strategy: str
     symbol: str = "XAUUSD"
@@ -99,10 +100,16 @@ class ResultSummary(BaseModel):
 
 class BacktestResult(BaseModel):
     id: str
+    name: str | None = None
     created_at: str
     strategy: str
     parameters: dict[str, Any]
     results: dict[str, Any]
+
+
+class SaveResultRequest(BaseModel):
+    result_id: str
+    name: str
 
 
 # ---------------------------------------------------------------------------

@@ -3,6 +3,12 @@
 
 ROOT="$(cd "$(dirname "$0")" && pwd)"
 
+# Ensure MongoDB is running via Docker Compose
+if ! docker compose -f "$ROOT/docker-compose.yml" ps --services --filter status=running 2>/dev/null | grep -q mongo; then
+  echo "Starting MongoDB via Docker Compose..."
+  docker compose -f "$ROOT/docker-compose.yml" up -d
+fi
+
 echo "Starting FastAPI backend on http://localhost:8000 ..."
 source "$ROOT/venv/bin/activate"
 uvicorn backend.main:app --reload --port 8000 &

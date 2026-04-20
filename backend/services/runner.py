@@ -47,6 +47,7 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
         max_sl_per_period = request_data.get("max_sl_per_period", None)
         sl_period = request_data.get("sl_period", "none")
         params = request_data.get("params", {})
+        user_id = request_data.get("_user_id")
 
         # Prepend the previous year as EMA warmup so indicator values match
         # MT5's fully-seeded EMA by the first bar of the test period.
