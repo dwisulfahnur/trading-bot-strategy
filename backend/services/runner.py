@@ -46,6 +46,7 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
         commission_per_lot = request_data.get("commission_per_lot", 3.5)
         max_sl_per_period = request_data.get("max_sl_per_period", None)
         sl_period = request_data.get("sl_period", "none")
+        max_positions = int(request_data.get("max_positions", 1))
         params = request_data.get("params", {})
         user_id = request_data.get("_user_id")
 
@@ -56,7 +57,7 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
 
         df        = load_data(all_years, timeframe, symbol=symbol)
         tick_data = load_tick_data(all_years, symbol=symbol)
-        strategy  = load_strategy(strategy_name, params)
+        strategy  = load_strategy(strategy_name, {**params, "symbol": symbol})
         df = strategy.generate_signals(df)
 
         # Suppress signals from the warmup year — used only for EMA convergence
@@ -76,6 +77,7 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
             max_pending_bars=max_pending_bars,
             max_sl_per_period=max_sl_per_period,
             sl_period=sl_period,
+            max_positions=max_positions,
         )
 
         metrics = compute_metrics(trades, initial_capital, risk_pct, compound=compound, commission_per_lot=commission_per_lot, symbol=symbol)
@@ -90,6 +92,7 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
             "breakeven_sl_r": breakeven_sl_r,
             "max_sl_per_period": max_sl_per_period,
             "sl_period": sl_period,
+            "max_positions": max_positions,
         }
         out_path = save_result(metrics, strategy_name, params_with_sim, timeframe, years, symbol=symbol)
         result_id = out_path.stem

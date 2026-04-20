@@ -59,6 +59,8 @@ STRATEGY_PARAMS: dict[str, list[dict]] = {
     ],
     "william_fractals": [
         {"name": "ema_period",        "type": "int",   "default": 200,   "min": 10,   "max": 500},
+        {"name": "ema_timeframe",     "type": "str",   "default": "same",
+         "options": ["same", "M1", "M5", "M15", "H1", "H4", "D1"]},
         {"name": "fractal_n",         "type": "int",   "default": 9,     "min": 2,    "max": 20},
         {"name": "rr_ratio",          "type": "float", "default": 1.5,   "min": 0.5,  "max": 5.0,  "step": 0.1},
         # Market session filter

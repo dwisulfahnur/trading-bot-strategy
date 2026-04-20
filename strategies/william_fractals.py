@@ -24,9 +24,13 @@ sideways_filter = "stochrsi"    → skip signals when StochRSI is not in the ext
                                     sells only when StochRSI > overbought)
 """
 
+from pathlib import Path
+
 import polars as pl
 
 from strategies.base import BaseStrategy
+
+_DATA_DIR = Path(__file__).parent.parent / "data" / "parquet" / "ohlcv"
 
 
 class WilliamFractalsStrategy(BaseStrategy):
@@ -35,6 +39,8 @@ class WilliamFractalsStrategy(BaseStrategy):
     def __init__(
         self,
         ema_period: int = 200,
+        ema_timeframe: str = "same",
+        symbol: str = "XAUUSD",
         fractal_n: int = 9,
         rr_ratio: float = 1.5,
         # Market session filter
@@ -66,6 +72,8 @@ class WilliamFractalsStrategy(BaseStrategy):
         stochrsi_overbought: float = 80.0,
     ) -> None:
         self.ema_period = ema_period
+        self.ema_timeframe = ema_timeframe
+        self.symbol = symbol
         self.fractal_n = fractal_n
         self.rr_ratio = rr_ratio
         self.sessions = sessions
@@ -95,9 +103,13 @@ class WilliamFractalsStrategy(BaseStrategy):
     def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
         n = self.fractal_n
 
+        if self.ema_timeframe == "same":
+            df = df.with_columns(self._ema(self.ema_period))
+        else:
+            df = self._load_htf_ema(df)
+
         df = (
             df
-            .with_columns(self._ema(self.ema_period))
             .with_columns([
                 self._fractal_top_price(n).alias("_fractal_top"),
                 self._fractal_bot_price(n).alias("_fractal_bot"),
@@ -129,6 +141,33 @@ class WilliamFractalsStrategy(BaseStrategy):
     @staticmethod
     def _ema(period: int) -> pl.Expr:
         return pl.col("close").ewm_mean(span=period, adjust=False).alias("ema")
+
+    def _load_htf_ema(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Load a higher-timeframe parquet, compute EMA there, join_asof back onto df."""
+        years = sorted(df["_year"].unique().to_list())
+        frames = []
+        for year in years:
+            path = _DATA_DIR / self.ema_timeframe / f"{self.symbol}_{self.ema_timeframe}_{year}.parquet"
+            if path.exists():
+                frames.append(pl.read_parquet(path, columns=["time", "close"]))
+
+        if not frames:
+            raise FileNotFoundError(
+                f"No {self.ema_timeframe} data found for {self.symbol} years {years}. "
+                f"Check {_DATA_DIR / self.ema_timeframe}/"
+            )
+
+        htf = (
+            pl.concat(frames)
+            .sort("time")
+            .with_columns(
+                pl.col("close").ewm_mean(span=self.ema_period, adjust=False).alias("ema")
+            )
+            .select(["time", "ema"])
+        )
+
+        # For each bar in df, take the EMA value from the most recent HTF bar at or before it
+        return df.sort("time").join_asof(htf, on="time", strategy="backward")
 
     @staticmethod
     def _fractal_top_price(n: int) -> pl.Expr:

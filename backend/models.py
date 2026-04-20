@@ -22,6 +22,7 @@ class BacktestRequest(BaseModel):
     commission_per_lot: float = Field(default=3.5, ge=0)
     max_sl_per_period: int | None = None
     sl_period: str = "none"
+    max_positions: int = Field(default=1, ge=1, le=10)
     params: dict[str, Any] = Field(default_factory=dict)
 
 

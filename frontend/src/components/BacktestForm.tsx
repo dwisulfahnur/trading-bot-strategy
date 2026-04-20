@@ -27,6 +27,11 @@ const PARAM_META: Record<string, ParamInfo> = {
   },
 
   // William Fractals
+  ema_timeframe: {
+    label: 'EMA Source Timeframe',
+    description:
+      'Load EMA from a different (higher) timeframe parquet file instead of computing it on the running timeframe. Useful for multi-timeframe trend confirmation — e.g. run M15 signals filtered by an H1 EMA.',
+  },
   fractal_n: {
     label: 'Fractal N (each side)',
     description:
@@ -268,7 +273,7 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
   william_fractals: [
     {
       title: 'Signal Generation',
-      params: ['ema_period', 'fractal_n', 'rr_ratio'],
+      params: ['ema_period', 'ema_timeframe', 'fractal_n', 'rr_ratio'],
     },
     {
       title: 'Session Filter',
@@ -375,6 +380,15 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
 
 // Human-readable option labels for select-type params
 const OPTION_LABELS: Record<string, Record<string, string>> = {
+  ema_timeframe: {
+    same:  'Same as running TF',
+    M1:    'M1',
+    M5:    'M5',
+    M15:   'M15',
+    H1:    'H1',
+    H4:    'H4',
+    D1:    'D1 (Daily)',
+  },
   sideways_filter: {
     none:        'None — no filter',
     adx:         'ADX — trend strength',
@@ -451,6 +465,7 @@ export function BacktestForm({ onResult, initialParams }: Props) {
   const [slLimitOn, setSlLimitOn] = useState(false);
   const [slLimitMax, setSlLimitMax] = useState(2);
   const [slLimitPeriod, setSlLimitPeriod] = useState<'day' | 'week' | 'month'>('day');
+  const [maxPositions, setMaxPositions] = useState(1);
   const [commissionPerLot, setCommissionPerLot] = useState(3.5);
   const [stratParams, setStratParams] = useState<Record<string, number | string | boolean>>({});
   const [loading, setLoading] = useState(false);
@@ -483,6 +498,7 @@ export function BacktestForm({ onResult, initialParams }: Props) {
     const sp = initialParams.sl_period as string | undefined;
     if (sp === 'day' || sp === 'week' || sp === 'month') setSlLimitPeriod(sp);
     if (initialParams.commission_per_lot != null) setCommissionPerLot(initialParams.commission_per_lot as number);
+    if (initialParams.max_positions != null) setMaxPositions(initialParams.max_positions as number);
   }, [initialParams]);
 
   // Init strategy params from defaults, overlaying initialParams
@@ -557,6 +573,7 @@ export function BacktestForm({ onResult, initialParams }: Props) {
         commission_per_lot: commissionPerLot,
         max_sl_per_period: slLimitOn ? slLimitMax : null,
         sl_period: slLimitOn ? slLimitPeriod : 'none',
+        max_positions: maxPositions,
         params: stratParams,
       };
       const job = await api.runBacktest(req);
@@ -810,6 +827,23 @@ export function BacktestForm({ onResult, initialParams }: Props) {
               </div>
             )}
           </div>
+        </div>
+
+        {/* Max Positions */}
+        <div className="flex items-center gap-3">
+          <span className="text-sm text-slate-300">
+            Max Positions
+            <InfoTooltip text="Maximum number of trades that can be open simultaneously. When set to 1 (default) the engine behaves as before — one trade at a time. Higher values allow concurrent positions from different signals." />
+          </span>
+          <input
+            type="number"
+            value={maxPositions}
+            min={1}
+            max={10}
+            step={1}
+            onChange={(e) => setMaxPositions(Math.max(1, parseInt(e.target.value) || 1))}
+            className="w-16 bg-slate-800 border border-slate-600 rounded px-2 py-1 text-sm text-center text-slate-100"
+          />
         </div>
 
         {/* Breakeven */}

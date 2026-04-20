@@ -249,6 +249,7 @@ def simulate(
     max_pending_bars: int | None = None,
     max_sl_per_period: int | None = None,
     sl_period: str = "none",
+    max_positions: int = 1,
 ) -> list[Trade]:
     """
     Bar-by-bar simulation with optional tick-level execution.
@@ -265,18 +266,19 @@ def simulate(
     breakeven_r:      trigger R at which the SL is moved (e.g. 1.0 = move when up 1R).
     breakeven_sl_r:   R level the SL is moved to (0.0 = entry, 0.5 = lock in 0.5R profit).
     max_pending_bars: cancel limit orders that have not filled after this many bars.
+    max_positions:    maximum number of trades that may be open simultaneously.
 
     One-trade-per-fractal rule: once a fractal level triggers an entry that same
     level cannot trigger another entry even if price retraces back through it.
     """
     rows   = df.to_dicts()
     n_bars = len(rows)
-    trades:        list[Trade] = []
-    position:      Trade | None = None
-    pending:       dict  | None = None
-    pending_bars:  int = 0
-    last_top_used: float | None = None
-    last_bot_used: float | None = None
+    trades:       list[Trade] = []
+    positions:    list[Trade] = []
+    pending:      dict | None = None
+    pending_bars: int = 0
+    tops_used:    set = set()
+    bots_used:    set = set()
 
     # Period SL-limit state
     _sl_limit_active   = max_sl_per_period is not None and sl_period != "none"
@@ -308,7 +310,7 @@ def simulate(
         # ----------------------------------------------------------------
         # Open a pending trade at this bar
         # ----------------------------------------------------------------
-        if pending is not None and position is None:
+        if pending is not None and len(positions) < max_positions:
             # Block entry for the rest of the period if SL limit is reached
             if _sl_limit_active:
                 pk = _get_period_key(bar["time"], sl_period)
@@ -320,7 +322,7 @@ def simulate(
                     pending_bars = 0
                     cancelled_this_bar = True
 
-        if pending is not None and position is None:
+        if pending is not None and len(positions) < max_positions:
             limit_price = pending.get("entry_limit")
 
             if limit_price is not None:
@@ -358,7 +360,7 @@ def simulate(
                     entry_price = limit_price
                     sl_dist = abs(entry_price - pending["sl"])
                     if sl_dist > 0:
-                        position = Trade(
+                        positions.append(Trade(
                             direction=pending["signal"],
                             entry_time=bar["time"],
                             entry_price=entry_price,
@@ -366,7 +368,7 @@ def simulate(
                             tp=pending["tp"],
                             year=bar.get("_year", 0),
                             _initial_sl_dist=sl_dist,
-                        )
+                        ))
                     pending = None
                     pending_bars = 0
                 elif cancelled:
@@ -392,7 +394,7 @@ def simulate(
 
                 sl_dist = abs(entry_price - pending["sl"])
                 if sl_dist > 0:
-                    position = Trade(
+                    positions.append(Trade(
                         direction=pending["signal"],
                         entry_time=bar["time"],
                         entry_price=entry_price,
@@ -400,48 +402,50 @@ def simulate(
                         tp=pending["tp"],
                         year=bar.get("_year", 0),
                         _initial_sl_dist=sl_dist,
-                    )
+                    ))
                     if pending["signal"] == 1:
-                        last_top_used = pending.get("last_top")
+                        if pending.get("last_top") is not None:
+                            tops_used.add(pending["last_top"])
                     else:
-                        last_bot_used = pending.get("last_bot")
+                        if pending.get("last_bot") is not None:
+                            bots_used.add(pending["last_bot"])
                 pending = None
                 pending_bars = 0
 
         # ----------------------------------------------------------------
-        # Manage open position
+        # Manage open positions
         # ----------------------------------------------------------------
-        if position is not None:
+        for pos in list(positions):
             if has_ticks:
                 # Tick-level resolution: exact SL/TP ordering, correct BE sequencing
-                exit_reason = _resolve_position_ticks(position, bar_bids, breakeven_r, breakeven_sl_r)
+                exit_reason = _resolve_position_ticks(pos, bar_bids, breakeven_r, breakeven_sl_r)
                 hit_tp = exit_reason == "tp"
                 hit_sl = exit_reason == "sl"
             else:
                 # OHLCV fallback — legacy bar heuristics
-                if breakeven_r is not None and not position._be_active:
-                    if position.direction == 1:
-                        be_trigger = position.entry_price + position._initial_sl_dist * breakeven_r
+                if breakeven_r is not None and not pos._be_active:
+                    if pos.direction == 1:
+                        be_trigger = pos.entry_price + pos._initial_sl_dist * breakeven_r
                         if bar["high"] >= be_trigger:
-                            position.sl = position.entry_price + position._initial_sl_dist * breakeven_sl_r
-                            position._be_active = True
+                            pos.sl = pos.entry_price + pos._initial_sl_dist * breakeven_sl_r
+                            pos._be_active = True
                     else:
-                        be_trigger = position.entry_price - position._initial_sl_dist * breakeven_r
+                        be_trigger = pos.entry_price - pos._initial_sl_dist * breakeven_r
                         if bar["low"] <= be_trigger:
-                            position.sl = position.entry_price - position._initial_sl_dist * breakeven_sl_r
-                            position._be_active = True
+                            pos.sl = pos.entry_price - pos._initial_sl_dist * breakeven_sl_r
+                            pos._be_active = True
 
-                if position.direction == 1:
-                    hit_tp = bar["high"] >= position.tp
-                    hit_sl = bar["low"]  <= position.sl
+                if pos.direction == 1:
+                    hit_tp = bar["high"] >= pos.tp
+                    hit_sl = bar["low"]  <= pos.sl
                 else:
-                    hit_tp = bar["low"]  <= position.tp
-                    hit_sl = bar["high"] >= position.sl
+                    hit_tp = bar["low"]  <= pos.tp
+                    hit_sl = bar["high"] >= pos.sl
 
                 # Same-bar conflict heuristic (candle direction proxy)
                 if hit_tp and hit_sl:
                     bullish_bar = bar["close"] >= bar["open"]
-                    if position.direction == 1:
+                    if pos.direction == 1:
                         hit_tp = bullish_bar
                         hit_sl = not bullish_bar
                     else:
@@ -449,56 +453,57 @@ def simulate(
                         hit_sl = bullish_bar
 
             if hit_tp:
-                position.exit_time   = bar["time"]
-                position.exit_price  = position.tp
-                position.exit_reason = "tp"
-                position.pnl_r       = abs(position.tp - position.entry_price) / position._initial_sl_dist
-                trades.append(position)
-                position = None
+                pos.exit_time   = bar["time"]
+                pos.exit_price  = pos.tp
+                pos.exit_reason = "tp"
+                pos.pnl_r       = abs(pos.tp - pos.entry_price) / pos._initial_sl_dist
+                trades.append(pos)
+                positions.remove(pos)
             elif hit_sl:
-                position.exit_time  = bar["time"]
-                if position._be_active:
-                    position.exit_price  = position.sl   # the locked SL level (entry ± breakeven_sl_r × dist)
-                    position.exit_reason = "be"
-                    position.pnl_r       = breakeven_sl_r
+                pos.exit_time  = bar["time"]
+                if pos._be_active:
+                    pos.exit_price  = pos.sl
+                    pos.exit_reason = "be"
+                    pos.pnl_r       = breakeven_sl_r
                 else:
-                    position.exit_price  = position.sl
-                    position.exit_reason = "sl"
-                    position.pnl_r       = -1.0
+                    pos.exit_price  = pos.sl
+                    pos.exit_reason = "sl"
+                    pos.pnl_r       = -1.0
                     if _sl_limit_active:
                         pk = _get_period_key(bar["time"], sl_period)
                         if pk != _current_period_key:
                             _current_period_key = pk
                             _period_sl_count = 0
                         _period_sl_count += 1
-                trades.append(position)
-                position = None
+                trades.append(pos)
+                positions.remove(pos)
 
         # ----------------------------------------------------------------
-        # Queue next entry from this bar's signal (if flat)
+        # Queue next entry from this bar's signal (if below max_positions)
         # ----------------------------------------------------------------
-        if position is None and pending is None and not cancelled_this_bar and bar["signal"] != 0:
+        if len(positions) < max_positions and pending is None and not cancelled_this_bar and bar["signal"] != 0:
             frac_level = bar.get("last_top") if bar["signal"] == 1 else bar.get("last_bot")
             already_used = (
-                (bar["signal"] == 1  and frac_level is not None and frac_level == last_top_used) or
-                (bar["signal"] == -1 and frac_level is not None and frac_level == last_bot_used)
+                (bar["signal"] == 1  and frac_level is not None and frac_level in tops_used) or
+                (bar["signal"] == -1 and frac_level is not None and frac_level in bots_used)
             )
             if not already_used:
                 pending = bar
                 pending_bars = 0
 
-    # Close any open trade at the last bar's close
-    if position is not None:
+    # Close any open trades at the last bar's close
+    for pos in positions:
         last = rows[-1]
-        position.exit_time   = last["time"]
-        position.exit_price  = last["close"]
-        position.exit_reason = "end_of_data"
-        sl_dist = position._initial_sl_dist
+        pos.exit_time   = last["time"]
+        pos.exit_price  = last["close"]
+        pos.exit_reason = "end_of_data"
+        sl_dist = pos._initial_sl_dist
         if sl_dist > 0:
-            diff = (last["close"] - position.entry_price) * position.direction
-            position.pnl_r = diff / sl_dist
-        trades.append(position)
+            diff = (last["close"] - pos.entry_price) * pos.direction
+            pos.pnl_r = diff / sl_dist
+        trades.append(pos)
 
+    trades.sort(key=lambda t: t.exit_time)
     return trades
 
 
@@ -759,6 +764,8 @@ def parse_args() -> argparse.Namespace:
     # William Fractals strategy params
     p.add_argument("--ema_period",     type=int,   default=200,
                    help="EMA period for trend filter")
+    p.add_argument("--ema_timeframe",  type=str,   default="same",
+                   help="Timeframe for EMA source data (same=use running TF, or M1/M5/M15/H1/H4)")
     p.add_argument("--fractal_period", type=int,   default=9,
                    help="Fractal window size (must be odd: 5, 9, 11 …)")
     p.add_argument("--rr_ratio",       type=float, default=1.5,
@@ -791,6 +798,8 @@ def parse_args() -> argparse.Namespace:
                    help="Trading sessions to allow signals in. "
                         "Options: all, asia, london, newyork, "
                         "asia_london, london_newyork, asia_newyork, asia_london_newyork")
+    p.add_argument("--max_positions",   type=int,   default=1,
+                   help="Maximum number of trades open simultaneously (default: 1)")
 
     return p.parse_args()
 
@@ -800,6 +809,7 @@ def main() -> None:
 
     strategy_params = {
         "ema_period":     args.ema_period,
+        "ema_timeframe":  args.ema_timeframe,
         "fractal_period": args.fractal_period,
         "rr_ratio":       args.rr_ratio,
         # Momentum Candle params (ignored by other strategies via load_strategy filtering)
@@ -811,6 +821,7 @@ def main() -> None:
         "tp_mult":          args.tp_mult,
         "max_pending_bars": args.max_pending_bars,
         "sessions":         args.sessions,
+        "symbol":           symbol,
     }
 
     # Prepend the previous year as EMA warmup so that by the first bar of the
@@ -848,7 +859,7 @@ def main() -> None:
     breakeven_r    = args.breakeven_r
     breakeven_sl_r = args.breakeven_sl_r if breakeven_r is not None else 0.0
     max_pending_bars = args.max_pending_bars if args.strategy == "momentum_candle" else None
-    trades = simulate(df, tick_data=tick_data, breakeven_r=breakeven_r, breakeven_sl_r=breakeven_sl_r, max_pending_bars=max_pending_bars)
+    trades = simulate(df, tick_data=tick_data, breakeven_r=breakeven_r, breakeven_sl_r=breakeven_sl_r, max_pending_bars=max_pending_bars, max_positions=args.max_positions)
     print(f"  {len(trades)} trades executed")
 
     compound = not args.no_compound

@@ -49,6 +49,7 @@ export interface BacktestRequest {
   commission_per_lot: number;
   max_sl_per_period: number | null;
   sl_period: string;
+  max_positions: number;
   params: Record<string, number | boolean | string>;
 }
 

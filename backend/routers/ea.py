@@ -8,6 +8,7 @@ POST /ea/generate
 
 import json
 import os
+import re
 from pathlib import Path
 
 import anthropic
@@ -894,6 +895,42 @@ def _strip_fences(code: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _format_mql_value(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return f"{value:g}"
+    return f'"{value}"'
+
+
+def _patch_ea_code(code: str, params: dict, results: dict) -> str:
+    for name, value in params.items():
+        mql_val = _format_mql_value(value)
+        pattern = rf'(\binput\s+\w+\s+{re.escape(name)}\s*=\s*)([^;]+)(;)'
+        code = re.sub(pattern, rf'\g<1>{mql_val}\3', code)
+
+    stat_subs = [
+        (r'(Total trades\s*:\s*)[\d]+',         rf'\g<1>{results.get("total_trades", 0)}'),
+        (r'(Win rate\s*:\s*)[\d.]+',            rf'\g<1>{results.get("win_rate_pct", 0):.1f}'),
+        (r'(Profit factor\s*:\s*)[\d.]+',       rf'\g<1>{results.get("profit_factor", 0):.3f}'),
+        (r'(Total return\s*:\s*)-?[\d.]+',      rf'\g<1>{results.get("total_return_pct", 0):.2f}'),
+        (r'(Max drawdown\s*:\s*)[\d.]+',        rf'\g<1>{results.get("max_drawdown_pct", 0):.2f}'),
+    ]
+    for pattern, repl in stat_subs:
+        code = re.sub(pattern, repl, code)
+
+    return code
+
+
+def _build_filename(strategy: str, params: dict, platform: str) -> str:
+    ext           = "mq4" if platform == "MT4" else "mq5"
+    tf            = str(params.get("timeframe", "H1"))
+    strategy_slug = strategy.replace("_", "")
+    return f"{strategy_slug}_{tf}_{platform}.{ext}"
+
+
 # ---------------------------------------------------------------------------
 # Endpoint
 # ---------------------------------------------------------------------------
@@ -915,15 +952,28 @@ def generate_ea(req: EARequest) -> EAResponse:
     params   = data.get("parameters", {})
     results  = data.get("results", {})
 
+    prompt = _build_prompt(strategy, params, results, platform)
+
+    cache_path = RESULT_DIR / f"{strategy}_{platform}.ea.json"
+    if cache_path.exists():
+        with open(cache_path) as f:
+            cached = json.load(f)
+        patched_code = _patch_ea_code(cached["code"], params, results)
+        return EAResponse(
+            code=patched_code,
+            platform=platform,
+            filename=_build_filename(strategy, params, platform),
+            prompt=prompt,
+        )
+
     api_key = os.getenv("ANTHROPIC_API_KEY")
     if not api_key:
         raise HTTPException(500, "ANTHROPIC_API_KEY is not configured — add it to the .env file")
 
     client = anthropic.Anthropic(api_key=api_key)
-    prompt = _build_prompt(strategy, params, results, platform)
 
     message = client.messages.create(
-        model="claude-opus-4-6",
+        model="claude-opus-4-7",
         max_tokens=8192,
         system=(
             "You are an expert MetaTrader developer. "
@@ -935,9 +985,12 @@ def generate_ea(req: EARequest) -> EAResponse:
 
     code = _strip_fences(message.content[0].text)
 
-    ext           = "mq4" if platform == "MT4" else "mq5"
-    tf            = str(params.get("timeframe", "H1"))
-    strategy_slug = strategy.replace("_", "")
-    filename      = f"{strategy_slug}_{tf}_{platform}.{ext}"
+    with open(cache_path, "w") as f:
+        json.dump({"code": code}, f)
 
-    return EAResponse(code=code, platform=platform, filename=filename, prompt=prompt)
+    return EAResponse(
+        code=code,
+        platform=platform,
+        filename=_build_filename(strategy, params, platform),
+        prompt=prompt,
+    )
