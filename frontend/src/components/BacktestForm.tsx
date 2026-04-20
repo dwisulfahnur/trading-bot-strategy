@@ -194,6 +194,28 @@ const PARAM_META: Record<string, ParamInfo> = {
       'When ON, buy signals are only taken when price is above the EMA (uptrend) and sell signals only when below (downtrend). Turn OFF to allow counter-trend S/R trades in both directions.',
   },
 
+  // Grid Trading
+  center_period: {
+    label: 'Center EMA Period',
+    description:
+      'EMA period used as the dynamic grid center. Buy zones sit below this line, sell zones above it. Shorter = faster-moving center that tracks price more closely; longer = more stable, slower-reacting center.',
+  },
+  atr_period: {
+    label: 'ATR Period',
+    description:
+      'Lookback for the Average True Range used to size grid spacing. Longer period = smoother, more stable step size; shorter period = step adapts faster to recent volatility.',
+  },
+  grid_step_mult: {
+    label: 'Grid Step (× ATR)',
+    description:
+      'Grid spacing = ATR × this multiplier. e.g. 0.5 places levels every half ATR. Smaller = tighter grid with more frequent signals; larger = wider levels, fewer but higher-conviction bounces.',
+  },
+  grid_levels: {
+    label: 'Grid Levels (each side)',
+    description:
+      'Number of buy/sell zones placed on each side of the center EMA. Level 1 is closest to center (center ± 1 step), level N is furthest. Deeper levels catch larger mean-reversion moves.',
+  },
+
   // Order Block (SMC)
   structure_period: {
     label: 'Structure Period',
@@ -293,6 +315,20 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
         'alligator_jaw', 'alligator_teeth', 'alligator_lips',
         'stochrsi_rsi_period', 'stochrsi_stoch_period', 'stochrsi_oversold', 'stochrsi_overbought',
       ],
+    },
+  ],
+  grid: [
+    {
+      title: 'Grid Configuration',
+      params: ['center_period', 'atr_period', 'grid_step_mult', 'grid_levels'],
+    },
+    {
+      title: 'Entry & Exit',
+      params: ['rr_ratio'],
+    },
+    {
+      title: 'Session Filter',
+      params: ['sessions'],
     },
   ],
   order_block_smc: [
