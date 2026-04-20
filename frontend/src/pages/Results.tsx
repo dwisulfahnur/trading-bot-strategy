@@ -1,6 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { createPortal } from 'react-dom';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import Select from 'react-select';
 import { ComparePanel } from '../components/ComparePanel';
 import { api } from '../api/client';
 import type { ResultSummary } from '../api/types';
@@ -25,6 +26,7 @@ export function Results() {
   const [filterTf, setFilterTf] = useState<string[]>([]);
   const [filterYears, setFilterYears] = useState<number[]>([]);
   const [filterStrategies, setFilterStrategies] = useState<string[]>([]);
+  const [filterRisk, setFilterRisk] = useState<number[]>([]);
   const [ddMin, setDdMin] = useState('');
   const [ddMax, setDdMax] = useState('');
   const [wrMin, setWrMin] = useState('');
@@ -58,15 +60,21 @@ export function Results() {
     else { setSortKey(key); setSortAsc(key === 'max_drawdown_pct'); }
   };
 
-  // Derive available years and strategies from loaded results
+  // Derive available years, strategies, and risk values from loaded results
   const availableYears = [...new Set(results.flatMap((r) => r.years))].sort();
   const availableStrategies = [...new Set(results.map((r) => r.strategy))].sort();
+  const availableRisks = [...new Set(
+    results
+      .map((r) => r.parameters?.risk_pct as number | undefined)
+      .filter((v): v is number => v !== undefined && v !== null)
+  )].sort((a, b) => a - b);
 
   // Apply filters then sort
   const filtered = results.filter((r) => {
     if (filterTf.length > 0 && !filterTf.includes(r.timeframe)) return false;
     if (filterYears.length > 0 && !filterYears.some((y) => r.years.includes(y))) return false;
     if (filterStrategies.length > 0 && !filterStrategies.includes(r.strategy)) return false;
+    if (filterRisk.length > 0 && !filterRisk.includes(r.parameters?.risk_pct as number)) return false;
     if (ddMin !== '' && r.max_drawdown_pct < parseFloat(ddMin)) return false;
     if (ddMax !== '' && r.max_drawdown_pct > parseFloat(ddMax)) return false;
     if (wrMin !== '' && r.win_rate_pct < parseFloat(wrMin)) return false;
@@ -111,6 +119,7 @@ export function Results() {
 
   const hasActiveFilters =
     filterTf.length > 0 || filterYears.length > 0 || filterStrategies.length > 0 ||
+    filterRisk.length > 0 ||
     ddMin !== '' || ddMax !== '' || wrMin !== '' || wrMax !== '';
 
   const SortIcon = ({ k }: { k: SortKey }) =>
@@ -155,7 +164,7 @@ export function Results() {
               <span className="text-sm font-medium text-slate-300">Filters</span>
               {hasActiveFilters && (
                 <button
-                  onClick={() => { setFilterTf([]); setFilterYears([]); setFilterStrategies([]); setDdMin(''); setDdMax(''); setWrMin(''); setWrMax(''); }}
+                  onClick={() => { setFilterTf([]); setFilterYears([]); setFilterStrategies([]); setFilterRisk([]); setDdMin(''); setDdMax(''); setWrMin(''); setWrMax(''); setRetMin(''); setRetMax(''); }}
                   className="text-xs text-slate-500 hover:text-slate-300 transition-colors"
                 >
                   Clear all
@@ -214,22 +223,81 @@ export function Results() {
               {availableStrategies.length > 1 && (
                 <div className="space-y-1.5">
                   <span className="text-xs text-slate-500 uppercase tracking-wide">Strategy</span>
+                  <Select
+                    isMulti
+                    options={availableStrategies.map((s) => ({
+                      value: s,
+                      label: s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+                    }))}
+                    value={filterStrategies.map((s) => ({
+                      value: s,
+                      label: s.replace(/_/g, ' ').replace(/\b\w/g, (c) => c.toUpperCase()),
+                    }))}
+                    onChange={(opts) => setFilterStrategies(opts.map((o) => o.value))}
+                    placeholder="All strategies…"
+                    styles={{
+                      container: (base) => ({ ...base, minWidth: '200px' }),
+                      control: (base, state) => ({
+                        ...base,
+                        backgroundColor: '#1e293b',
+                        borderColor: state.isFocused ? '#3b82f6' : '#334155',
+                        borderRadius: '0.375rem',
+                        boxShadow: 'none',
+                        minHeight: '30px',
+                        '&:hover': { borderColor: '#475569' },
+                      }),
+                      menu: (base) => ({
+                        ...base,
+                        backgroundColor: '#1e293b',
+                        border: '1px solid #334155',
+                        borderRadius: '0.5rem',
+                        overflow: 'hidden',
+                        zIndex: 50,
+                      }),
+                      option: (base, state) => ({
+                        ...base,
+                        backgroundColor: state.isSelected ? '#2563eb' : state.isFocused ? '#334155' : 'transparent',
+                        color: state.isSelected ? '#fff' : '#cbd5e1',
+                        fontSize: '0.75rem',
+                        cursor: 'pointer',
+                      }),
+                      multiValue: (base) => ({ ...base, backgroundColor: '#1d4ed8', borderRadius: '0.25rem' }),
+                      multiValueLabel: (base) => ({ ...base, color: '#fff', fontSize: '0.7rem', paddingLeft: '6px' }),
+                      multiValueRemove: (base) => ({ ...base, color: '#93c5fd', ':hover': { backgroundColor: '#1e40af', color: '#fff' } }),
+                      placeholder: (base) => ({ ...base, color: '#475569', fontSize: '0.75rem' }),
+                      input: (base) => ({ ...base, color: '#f1f5f9', fontSize: '0.75rem' }),
+                      indicatorSeparator: () => ({ display: 'none' }),
+                      dropdownIndicator: (base) => ({ ...base, color: '#475569', padding: '0 4px' }),
+                      clearIndicator: (base) => ({ ...base, color: '#475569', padding: '0 4px' }),
+                      valueContainer: (base) => ({ ...base, padding: '2px 6px', gap: '2px' }),
+                    }}
+                  />
+                </div>
+              )}
+
+              {/* Risk % */}
+              {availableRisks.length > 0 && (
+                <div className="space-y-1.5">
+                  <span className="text-xs text-slate-500 uppercase tracking-wide">Risk %</span>
                   <div className="flex gap-1.5 flex-wrap">
-                    {availableStrategies.map((s) => (
-                      <button
-                        key={s}
-                        onClick={() => setFilterStrategies((prev) =>
-                          prev.includes(s) ? prev.filter((x) => x !== s) : [...prev, s]
-                        )}
-                        className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
-                          filterStrategies.includes(s)
-                            ? 'bg-blue-600 text-white'
-                            : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
-                        }`}
-                      >
-                        {s.replace(/_/g, ' ')}
-                      </button>
-                    ))}
+                    {availableRisks.map((r) => {
+                      const label = `${(r * 100).toFixed(r * 100 % 1 === 0 ? 0 : 1)}%`;
+                      return (
+                        <button
+                          key={r}
+                          onClick={() => setFilterRisk((prev) =>
+                            prev.includes(r) ? prev.filter((x) => x !== r) : [...prev, r]
+                          )}
+                          className={`px-2.5 py-1 rounded text-xs font-medium transition-colors ${
+                            filterRisk.includes(r)
+                              ? 'bg-blue-600 text-white'
+                              : 'bg-slate-800 text-slate-400 hover:bg-slate-700'
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -289,6 +357,7 @@ export function Results() {
                   />
                 </div>
               </div>
+
             </div>
           </div>
         )}
@@ -335,7 +404,7 @@ export function Results() {
             <div className="flex flex-col items-center justify-center py-12 text-slate-600 gap-2">
               <p className="text-sm">No results match the current filters.</p>
               <button
-                onClick={() => { setFilterTf([]); setFilterYears([]); setFilterStrategies([]); setDdMin(''); setDdMax(''); setWrMin(''); setWrMax(''); }}
+                onClick={() => { setFilterTf([]); setFilterYears([]); setFilterStrategies([]); setFilterRisk([]); setDdMin(''); setDdMax(''); setWrMin(''); setWrMax(''); setRetMin(''); setRetMax(''); }}
                 className="text-blue-400 hover:text-blue-300 text-xs"
               >
                 Clear filters
