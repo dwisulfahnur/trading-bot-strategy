@@ -6,6 +6,7 @@ interface MonthData {
   wins: number;
   win_rate_pct: number;
   return_pct: number;
+  gain_usd: number;
 }
 
 interface Props {
@@ -38,11 +39,13 @@ function computePerMonth(
     const mt = groups.get(month)!;
     const wins = mt.filter((t) => t.exit_reason === 'tp').length;
     const endCapital = mt[mt.length - 1].capital_after;
+    const gain_usd = mt.reduce((sum, t) => sum + t.profit_usd, 0);
     result[month] = {
       total_trades: mt.length,
       wins,
       win_rate_pct: (wins / mt.length) * 100,
       return_pct: ((endCapital - prevCapital) / prevCapital) * 100,
+      gain_usd,
     };
     prevCapital = endCapital;
   }
@@ -79,18 +82,18 @@ export function PerMonthTable({ trades, initialCapital }: Props) {
   };
 
   // Year-level aggregates
-  const yearTotals = (yr: string): { trades: number; wins: number; return_pct: number } => {
+  const yearTotals = (yr: string): { trades: number; wins: number; return_pct: number; gain_usd: number } => {
     const months = byYear.get(yr)!;
-    let trades = 0, wins = 0;
-    // Compound the monthly returns for the year return
+    let trades = 0, wins = 0, gain_usd = 0;
     let factor = 1;
     for (const m of months) {
       const d = perMonth[m];
       trades += d.total_trades;
       wins += d.wins;
+      gain_usd += d.gain_usd;
       factor *= 1 + d.return_pct / 100;
     }
-    return { trades, wins, return_pct: (factor - 1) * 100 };
+    return { trades, wins, return_pct: (factor - 1) * 100, gain_usd };
   };
 
   return (
@@ -102,6 +105,7 @@ export function PerMonthTable({ trades, initialCapital }: Props) {
             <th className="px-4 py-2 text-right">Trades</th>
             <th className="px-4 py-2 text-right">Wins</th>
             <th className="px-4 py-2 text-right">Win Rate</th>
+            <th className="px-4 py-2 text-right">Gain (USD)</th>
             <th className="px-4 py-2 text-right">Return</th>
           </tr>
         </thead>
@@ -127,6 +131,9 @@ export function PerMonthTable({ trades, initialCapital }: Props) {
                 <td className="px-4 py-2 text-right text-slate-300">
                   {tot.trades > 0 ? ((tot.wins / tot.trades) * 100).toFixed(1) : '—'}%
                 </td>
+                <td className={`px-4 py-2 text-right font-semibold ${tot.gain_usd >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                  {tot.gain_usd >= 0 ? '+' : ''}${tot.gain_usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                </td>
                 <td className={`px-4 py-2 text-right font-semibold ${tot.return_pct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                   {tot.return_pct >= 0 ? '+' : ''}{tot.return_pct.toFixed(2)}%
                 </td>
@@ -144,6 +151,9 @@ export function PerMonthTable({ trades, initialCapital }: Props) {
                         <td className="px-4 py-1.5 text-right text-slate-400">{d.total_trades}</td>
                         <td className="px-4 py-1.5 text-right text-slate-500">{d.wins}</td>
                         <td className="px-4 py-1.5 text-right text-slate-300">{d.win_rate_pct.toFixed(1)}%</td>
+                        <td className={`px-4 py-1.5 text-right font-medium ${d.gain_usd >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                          {d.gain_usd >= 0 ? '+' : ''}${d.gain_usd.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                        </td>
                         <td className={`px-4 py-1.5 text-right font-medium ${d.return_pct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
                           {d.return_pct >= 0 ? '+' : ''}{d.return_pct.toFixed(2)}%
                         </td>

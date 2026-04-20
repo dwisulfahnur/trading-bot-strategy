@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import Select from 'react-select';
 import { api } from '../api/client';
@@ -6,6 +6,7 @@ import type { BacktestRequest, BacktestResult, StrategyMeta } from '../api/types
 
 interface Props {
   onResult: (result: BacktestResult) => void;
+  initialParams?: Record<string, unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -427,7 +428,7 @@ function InfoTooltip({ text }: { text: string }) {
 // Main form
 // ---------------------------------------------------------------------------
 
-export function BacktestForm({ onResult }: Props) {
+export function BacktestForm({ onResult, initialParams }: Props) {
   const { data: strategies = [] } = useQuery({
     queryKey: ['strategies'],
     queryFn: api.getStrategies,
@@ -454,18 +455,53 @@ export function BacktestForm({ onResult }: Props) {
   const [stratParams, setStratParams] = useState<Record<string, number | string | boolean>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const appliedParamsRef = useRef<string>('');
 
   const stratMeta: StrategyMeta | undefined = strategies.find((s) => s.name === strategy);
 
-  // Init strategy params from defaults
+  // Apply initialParams whenever they change (handles fresh mount and re-navigation)
+  useEffect(() => {
+    if (!initialParams) return;
+    const key = JSON.stringify(initialParams);
+    if (key === appliedParamsRef.current) return;
+    appliedParamsRef.current = key;
+
+    if (initialParams.strategy) setStrategy(initialParams.strategy as string);
+    if (initialParams.symbol) setSelectedSymbol(initialParams.symbol as string);
+    if (initialParams.years) setSelectedYears(initialParams.years as number[]);
+    if (initialParams.timeframe) setTimeframe(initialParams.timeframe as string);
+    if (initialParams.initial_capital != null) setCapital(initialParams.initial_capital as number);
+    if (initialParams.risk_pct != null) {
+      setRiskPct(Math.round((initialParams.risk_pct as number) * 1000) / 10);
+    }
+    if (initialParams.compound != null) setCompound(initialParams.compound as boolean);
+    setBreakevenOn(initialParams.breakeven_r != null);
+    if (initialParams.breakeven_r != null) setBreakevenR(initialParams.breakeven_r as number);
+    if (initialParams.breakeven_sl_r != null) setBreakevenSlR(initialParams.breakeven_sl_r as number);
+    setSlLimitOn(initialParams.max_sl_per_period != null);
+    if (initialParams.max_sl_per_period != null) setSlLimitMax(initialParams.max_sl_per_period as number);
+    const sp = initialParams.sl_period as string | undefined;
+    if (sp === 'day' || sp === 'week' || sp === 'month') setSlLimitPeriod(sp);
+    if (initialParams.commission_per_lot != null) setCommissionPerLot(initialParams.commission_per_lot as number);
+  }, [initialParams]);
+
+  // Init strategy params from defaults, overlaying initialParams
   useEffect(() => {
     if (!stratMeta) return;
     const defaults: Record<string, number | string | boolean> = {};
     for (const p of stratMeta.parameters) {
       defaults[p.name] = p.default as number | string | boolean;
     }
+    // Overlay saved params (present when loading from a saved result)
+    if (initialParams && appliedParamsRef.current) {
+      for (const p of stratMeta.parameters) {
+        if (p.name in initialParams) {
+          defaults[p.name] = initialParams[p.name] as number | string | boolean;
+        }
+      }
+    }
     setStratParams(defaults);
-  }, [strategy, stratMeta]);
+  }, [strategy, stratMeta, initialParams]);
 
   const toggleYear = (year: number) => {
     setSelectedYears((prev) =>

@@ -29,7 +29,6 @@ export function Results() {
   const [sortKey, setSortKey] = useState<SortKey>('created_at');
   const [sortAsc, setSortAsc] = useState(false);
   const [compareIds, setCompareIds] = useState<Set<string>>(new Set());
-  const [selectedId, setSelectedId] = useState<string | null>(null);
 
   // Filters
   const [filterTf, setFilterTf] = useState<string[]>([]);
@@ -51,7 +50,6 @@ export function Results() {
     onSuccess: (_, id) => {
       queryClient.invalidateQueries({ queryKey: ['results'] });
       setCompareIds((prev) => { const s = new Set(prev); s.delete(id); return s; });
-      if (selectedId === id) setSelectedId(null);
     },
   });
 
@@ -60,7 +58,6 @@ export function Results() {
     onSuccess: (_, ids) => {
       queryClient.invalidateQueries({ queryKey: ['results'] });
       setCompareIds((prev) => { const s = new Set(prev); ids.forEach((id) => s.delete(id)); return s; });
-      if (selectedId && ids.includes(selectedId)) setSelectedId(null);
     },
   });
 
@@ -478,15 +475,12 @@ export function Results() {
                 </thead>
                 <tbody>
                   {sorted.map((r: ResultSummary) => {
-                    const isSelected = selectedId === r.id;
                     const inCompare = compareIds.has(r.id);
                     return (
                       <tr
                         key={r.id}
-                        onClick={() => setSelectedId(isSelected ? null : r.id)}
-                        className={`border-t border-slate-800 cursor-pointer transition-colors ${
-                          isSelected ? 'bg-blue-900/20' : 'hover:bg-slate-800/40'
-                        }`}
+                        onClick={() => navigate(`/results/${r.id}`)}
+                        className="border-t border-slate-800 cursor-pointer transition-colors hover:bg-slate-800/40"
                       >
                         <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                           <input
@@ -539,29 +533,6 @@ export function Results() {
           )}
         </div>
 
-        {/* Expanded detail panel */}
-        {selectedId && (() => {
-          const r = results.find((x) => x.id === selectedId);
-          if (!r) return null;
-          return (
-            <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-3">
-              <h3 className="font-semibold text-slate-200 text-sm">{r.id}</h3>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
-                <Stat label="Return" value={`${r.total_return_pct >= 0 ? '+' : ''}${r.total_return_pct.toFixed(2)}%`} />
-                <Stat label="Win Rate" value={`${r.win_rate_pct.toFixed(1)}%`} />
-                <Stat label="Profit Factor" value={r.profit_factor.toFixed(3)} />
-                <Stat label="Max Drawdown" value={`-${r.max_drawdown_pct.toFixed(2)}%`} />
-              </div>
-              <a
-                href="/"
-                onClick={() => sessionStorage.setItem('loadResult', selectedId)}
-                className="inline-block text-xs text-blue-400 hover:text-blue-300"
-              >
-                Open in backtest view →
-              </a>
-            </div>
-          );
-        })()}
       </div>
     </div>
   );
@@ -602,11 +573,3 @@ function ColHeader({ label, tip }: { label: string; tip?: string }) {
   );
 }
 
-function Stat({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="bg-slate-800 rounded-lg p-3">
-      <div className="text-xs text-slate-500 mb-1">{label}</div>
-      <div className="text-slate-100 font-semibold">{value}</div>
-    </div>
-  );
-}

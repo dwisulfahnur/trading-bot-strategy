@@ -4,6 +4,7 @@ import { AuthProvider } from './contexts/AuthContext';
 import { ProtectedRoute } from './components/ProtectedRoute';
 import { Home } from './pages/Home';
 import { Results } from './pages/Results';
+import { ResultDetail } from './pages/ResultDetail';
 import { Login } from './pages/Login';
 import { Register } from './pages/Register';
 
@@ -34,6 +35,14 @@ export default function App() {
               element={
                 <ProtectedRoute>
                   <Results />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/results/:id"
+              element={
+                <ProtectedRoute>
+                  <ResultDetail />
                 </ProtectedRoute>
               }
             />

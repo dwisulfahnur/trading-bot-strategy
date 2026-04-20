@@ -1,5 +1,5 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useState, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { BacktestForm } from '../components/BacktestForm';
 import { ResultCard } from '../components/ResultCard';
@@ -17,6 +17,8 @@ import type { BacktestResult, OhlcvBar } from '../api/types';
 export function Home() {
   const { user, logout } = useAuth();
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const loadId = searchParams.get('load');
   const [result, setResult] = useState<BacktestResult | null>(null);
   const [highlightedTrade, setHighlightedTrade] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<'equity' | 'price' | 'trades' | 'stats'>('equity');
@@ -40,6 +42,7 @@ export function Home() {
     setSaveName('');
     setSaveError('');
     setSavedId(null);
+    if (searchParams.has('load')) setSearchParams({}, { replace: true });
   }
 
   async function handleSave() {
@@ -58,6 +61,23 @@ export function Home() {
       setSaving(false);
     }
   }
+
+  // Auto-load result from ?load=<id> and pre-fill form
+  const [loadParams, setLoadParams] = useState<Record<string, unknown> | undefined>(undefined);
+  useEffect(() => {
+    if (!loadId) return;
+    api.getResult(loadId).then((r) => {
+      setResult(r);
+      setHighlightedTrade(null);
+      setActiveTab('equity');
+      setSaveName(r.name ?? '');
+      setSaveError('');
+      setSavedId(r.id); // treat it as already saved
+      setLoadParams({ strategy: r.strategy, ...r.parameters });
+    }).catch(() => {
+      // silently ignore — user stays on blank form
+    });
+  }, [loadId]);
 
   // Fetch OHLCV only when we have a result
   const { data: bars = [] } = useQuery<OhlcvBar[]>({
@@ -118,7 +138,7 @@ export function Home() {
           <h2 className="text-sm font-semibold text-slate-400 uppercase tracking-wide mb-6">
             Configure Backtest
           </h2>
-          <BacktestForm onResult={handleNewResult} />
+          <BacktestForm onResult={handleNewResult} initialParams={loadParams ?? undefined} />
         </aside>
 
         {/* Right panel — results */}

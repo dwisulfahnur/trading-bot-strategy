@@ -1,8 +1,8 @@
-# CLAUDE.md — XAUUSD Backtest Framework
+# CLAUDE.md — Trading Backtest Strategy
 
 ## Project Overview
 
-A full-stack backtesting app for XAUUSD (Gold/USD) trading strategies. A FastAPI backend runs strategy simulations on local Polars parquet data; a React/TypeScript frontend displays results interactively.
+A full-stack backtesting app for multi pairs trading strategies. A FastAPI backend runs strategy simulations on local Polars parquet data; a React/TypeScript frontend displays results interactively.
 
 ---
 

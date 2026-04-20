@@ -1,5 +1,5 @@
 # Web App Implementation Prompt
-## XAUUSD Backtest Web Application
+## Trading Backtest Strategy Web Application
 
 ---
 

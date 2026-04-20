@@ -1,4 +1,4 @@
-# XAUUSD Backtest Framework
+# Trading Backtest Strategy
 
 A full-stack backtesting platform for XAUUSD (Gold/USD) trading strategies. Run strategy simulations on historical OHLCV data and explore results through an interactive React dashboard.
 
