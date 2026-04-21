@@ -41,6 +41,8 @@ VALID_TIMEFRAMES = ["M1", "M5", "M15", "H1", "H4"]
 PAIR_CONFIG: dict[str, dict] = {
     # Metals
     "XAUUSD": {"contract_size": 100,     "pip_mult": 10.0},
+    # Indices (USD-quoted, 1 lot = 1 contract, 1 point = $1)
+    "USTEC":  {"contract_size": 1,       "pip_mult": 1.0},
     # USD-quoted forex
     "EURUSD": {"contract_size": 100_000, "pip_mult": 10_000.0},
     "GBPUSD": {"contract_size": 100_000, "pip_mult": 10_000.0},
