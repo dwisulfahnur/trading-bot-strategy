@@ -138,6 +138,9 @@ STRATEGY_PARAMS: dict[str, list[dict]] = {
         {"name": "rr_ratio",          "type": "float", "default": 2.0,   "min": 0.5,  "max": 5.0,  "step": 0.1},
         {"name": "sl_mode",           "type": "str",   "default": "swing_midpoint",
          "options": ["swing_midpoint", "swing_point", "signal_candle"]},
+        {"name": "pending_cancel",    "type": "str",   "default": "max_bars",
+         "options": ["none", "max_bars", "hl_break", "both"]},
+        {"name": "max_pending_bars",  "type": "int",   "default": 10,    "min": 1,    "max": 50},
         # Market session filter
         {"name": "sessions",          "type": "str",   "default": "all",
          "options": ["all", "asia", "london", "newyork",

@@ -85,6 +85,7 @@ def _doc_to_summary(doc: dict) -> ResultSummary:
         total_return_pct=r.get("total_return_pct", 0.0),
         win_rate_pct=r.get("win_rate_pct", 0.0),
         max_drawdown_pct=r.get("max_drawdown_pct", 0.0),
+        max_drawdown_from_initial_pct=r.get("max_drawdown_from_initial_pct", 0.0),
         profit_factor=r.get("profit_factor", 0.0),
         total_trades=r.get("total_trades", 0),
         parameters=params,
