@@ -133,28 +133,63 @@ Call `CountPeriodSL(InpMagicNumber)` before placing any order. Skip if count >= 
 
 def _risk_block(params: dict, lang: str) -> str:
     from backtest import PAIR_CONFIG
-    risk_pct_pct   = float(params.get("risk_pct", 0.02)) * 100
-    compound       = params.get("compound", False)
-    symbol         = params.get("symbol", "XAUUSD")
-    pair_cfg       = PAIR_CONFIG.get(symbol, PAIR_CONFIG["XAUUSD"])
-    contract_size  = pair_cfg["contract_size"]
-    compound_label = (
+    risk_pct_pct    = float(params.get("risk_pct", 0.02)) * 100
+    compound        = params.get("compound", False)
+    symbol          = params.get("symbol", "XAUUSD")
+    pair_cfg        = PAIR_CONFIG.get(symbol, PAIR_CONFIG["XAUUSD"])
+    contract_size   = pair_cfg["contract_size"]
+    compound_label  = (
         "Yes — recalculate from current account balance each trade"
         if compound
         else "No — always use fixed initial balance"
     )
-    breakeven_r    = params.get("breakeven_r")
-    breakeven_sl_r = float(params.get("breakeven_sl_r", 0.0))
-    max_sl         = params.get("max_sl_per_period")
-    sl_period      = params.get("sl_period", "none")
+    breakeven_r     = params.get("breakeven_r")
+    breakeven_sl_r  = float(params.get("breakeven_sl_r", 0.0))
+    max_sl          = params.get("max_sl_per_period")
+    sl_period       = params.get("sl_period", "none")
+    risk_recovery   = float(params.get("risk_recovery", 0.0)) * 100
+
+    recovery_label = (
+        f"Reduced to {risk_recovery:.1f}% of balance when underwater"
+        if risk_recovery > 0
+        else "Not configured — use general risk when underwater"
+    )
+
+    initial_capital = float(params.get("initial_capital", 10000))
+    if risk_recovery > 0:
+        if compound:
+            lot_formula = (
+                f"`active_risk_pct / (sl_distance × {contract_size:,})`  "
+                f"where `active_risk_pct = balance × {risk_pct_pct:.1f}% / 100` "
+                f"when balance ≥ initial_capital, else `balance × {risk_recovery:.1f}% / 100`"
+            )
+        else:
+            lot_formula = (
+                f"`active_risk_amount / (sl_distance × {contract_size:,})`  "
+                f"where `active_risk_amount = {initial_capital:.0f} × {risk_pct_pct:.1f}% / 100` "
+                f"when balance ≥ initial_capital, else `{initial_capital:.0f} × {risk_recovery:.1f}% / 100` (fixed, no compounding)"
+            )
+        recovery_impl = (
+            f"  - Store `g_initial_capital` at EA start (first tick `AccountInfoDouble(ACCOUNT_BALANCE)`).\n"
+            f"  - Before every lot calculation: if `AccountInfoDouble(ACCOUNT_BALANCE) < g_initial_capital` use recovery risk, else use normal risk.\n"
+        )
+    else:
+        if compound:
+            lot_formula = f"`(balance × {risk_pct_pct:.1f}% / 100) / (sl_distance × {contract_size:,})`"
+        else:
+            lot_formula = f"`({initial_capital:.0f} × {risk_pct_pct:.1f}% / 100) / (sl_distance × {contract_size:,})` (fixed initial balance, no compounding)"
+        recovery_impl = ""
 
     return (
         f"## Risk Management\n"
         f"- Risk per trade: {risk_pct_pct:.1f}% of account balance\n"
-        f"- Lot size: `(balance × risk_pct) / (sl_distance × contract_size)`\n"
+        f"- Recovery risk when underwater: {recovery_label}\n"
+        f"- Max open positions: {params.get('max_positions', 1)}\n"
+        f"- Lot size: {lot_formula}\n"
         f"  - {symbol} contract_size = {contract_size:,} per lot\n"
         f"  - sl_distance = absolute price difference of entry to SL\n"
         f"  - Clamp to broker min/max lot, round to lot step\n"
+        f"{recovery_impl}"
         f"- Compounding: {compound_label}\n"
         + _breakeven_section(breakeven_r, breakeven_sl_r)
         + _sl_limit_section(max_sl, sl_period)
@@ -344,7 +379,7 @@ Group all `input` variables under labelled sections using `input group "..."` (M
 - `"=== Session Filter ==="` — sessions (display label)
 - `"=== Momentum Candle Filter ==="` — momentum_candle_filter, mc_body_ratio_min, mc_volume_factor, mc_volume_lookback
 - `"=== Sideways Filter ==="` — sideways_filter and its sub-parameters
-- `"=== Risk Management ==="` — risk_pct, compound, breakeven_r, max_sl_per_period, sl_period
+- `"=== Risk Management ==="` — risk_pct, risk_recovery, max_positions, compound, breakeven_r, max_sl_per_period, sl_period
 - `"=== Execution ==="` — magic_number, commission_per_lot
 
 ---
@@ -493,7 +528,7 @@ Group all `input` variables using `input group "..."` (MQL5) or string separator
 - `"=== Entry & Exit ==="` — retracement_pct, sl_mult, tp_mult, max_pending_bars
 - `"=== Session Filter ==="` — sessions (display label)
 - `"=== Sideways Filter ==="` — sideways_filter and sub-parameters
-- `"=== Risk Management ==="` — risk_pct, compound, breakeven_r, max_sl_per_period, sl_period
+- `"=== Risk Management ==="` — risk_pct, risk_recovery, max_positions, compound, breakeven_r, max_sl_per_period, sl_period
 - `"=== Execution ==="` — magic_number, commission_per_lot
 
 ---
@@ -714,7 +749,7 @@ Group all `input` variables using `input group "..."` (MQL5) or string separator
 - `"=== Entry & Exit ==="` — rr_ratio
 - `"=== Confluence Filters ==="` — require_fvg, require_ote, ote_fib_low, ote_fib_high
 - `"=== Session Filter ==="` — sessions (display label)
-- `"=== Risk Management ==="` — risk_pct, compound, breakeven_r, max_sl_per_period, sl_period
+- `"=== Risk Management ==="` — risk_pct, risk_recovery, max_positions, compound, breakeven_r, max_sl_per_period, sl_period
 - `"=== Execution ==="` — magic_number, commission_per_lot
 
 ---
@@ -868,6 +903,476 @@ When MT5 fills the order:
 
 
 # ---------------------------------------------------------------------------
+# N Structure Breakout prompt
+# ---------------------------------------------------------------------------
+
+def _prompt_n_structure(
+    params: dict, lang: str, mt_ver: str,
+    perf: str, param_lines_str: str,
+) -> str:
+    ema_p            = params.get("ema_period", 200)
+    ema_tf           = params.get("ema_timeframe", "same")
+    swing_n          = int(params.get("swing_n", 5))
+    rr               = params.get("rr_ratio", 2.0)
+    sl_mode          = params.get("sl_mode", "swing_midpoint")
+    sessions         = params.get("sessions", "all")
+    pending_cancel   = params.get("pending_cancel", "max_bars")
+    max_pending_bars = int(params.get("max_pending_bars", 10))
+    breakeven_r      = params.get("breakeven_r")
+    breakeven_sl_r   = float(params.get("breakeven_sl_r", 0.0))
+    max_positions    = int(params.get("max_positions", 1))
+    filter_desc      = _sideways_filter_desc(params)
+    session_sec      = _session_filter_section(sessions)
+
+    use_hl_break  = pending_cancel in ("hl_break", "both")
+    use_max_bars  = pending_cancel in ("max_bars",  "both")
+
+    # Build cancel global state vars conditionally
+    _cancel_globals = ""
+    if use_hl_break:
+        _cancel_globals += (
+            "double   g_buy_cancel_level      // HL price — cancel buy stop if low[1] breaks below this\n"
+            "double   g_sell_cancel_level     // LH price — cancel sell stop if high[1] breaks above this\n"
+        )
+    if use_max_bars:
+        _cancel_globals += (
+            "int      g_pending_buy_bars      // bars elapsed since buy stop was placed\n"
+            "int      g_pending_sell_bars     // bars elapsed since sell stop was placed\n"
+        )
+
+    # Build cancel step 2.5 conditionally
+    def _cancel_block(direction: str) -> str:
+        ticket = "g_pending_buy_ticket"  if direction == "buy"  else "g_pending_sell_ticket"
+        bars   = "g_pending_buy_bars"    if direction == "buy"  else "g_pending_sell_bars"
+        clevel = "g_buy_cancel_level"    if direction == "buy"  else "g_sell_cancel_level"
+        price_check = f"low[1] < {clevel}"  if direction == "buy"  else f"high[1] > {clevel}"
+        label  = "HL broken — setup structurally invalidated" if direction == "buy" else "LH broken — setup structurally invalidated"
+        lines  = []
+        if use_max_bars:
+            lines.append(f"{bars}++;")
+            lines.append("")
+        if use_hl_break:
+            lines.append(f"// 1. {label}")
+            lines.append(f"if({clevel} > 0.0 && {price_check}) {{{{")
+            lines.append(f"    trade.OrderDelete({ticket});")
+            lines.append(f"    {ticket}  = 0;")
+            if use_hl_break:
+                lines.append(f"    {clevel} = 0.0;")
+            if use_max_bars:
+                lines.append(f"    {bars}   = 0;")
+            lines.append("}")
+        if use_max_bars:
+            prefix = "else " if use_hl_break else ""
+            lines.append(f"// {'2' if use_hl_break else '1'}. Expiry — order not filled within {max_pending_bars} bars")
+            lines.append(f"{prefix}if({bars} >= {max_pending_bars}) {{{{")
+            lines.append(f"    trade.OrderDelete({ticket});")
+            lines.append(f"    {ticket}  = 0;")
+            if use_hl_break:
+                lines.append(f"    {clevel} = 0.0;")
+            lines.append(f"    {bars}   = 0;")
+            lines.append("}")
+        return "\n".join(lines)
+
+    _cancel_buy_block  = _cancel_block("buy")
+    _cancel_sell_block = _cancel_block("sell")
+
+    if pending_cancel == "none":
+        _cancel_step = "No cancellation — pending stop orders stay open until filled."
+    else:
+        modes = []
+        if use_hl_break:
+            modes.append("**HL/LH break**: cancel buy stop when `low[1] < HL`; cancel sell stop when `high[1] > LH`")
+        if use_max_bars:
+            modes.append(f"**Expiry**: cancel after `{max_pending_bars}` bars without fill")
+        _cancel_step = f"""Active cancel mode: **{pending_cancel}** — {' + '.join(modes)}.
+
+**Buy Stop cancellation** (if `g_pending_buy_ticket > 0`):
+```
+{_cancel_buy_block}
+```
+
+**Sell Stop cancellation** (if `g_pending_sell_ticket > 0`):
+```
+{_cancel_sell_block}
+```"""
+
+    # Step-9: lines to store cancel state when arming a new stop order
+    _store_buy_cancel  = "\ng_buy_cancel_level    = g_hl;                   // cancel if price breaks below the pullback HL" if use_hl_break else ""
+    _store_buy_bars    = "\ng_pending_buy_bars    = 0;" if use_max_bars else ""
+    _store_sell_cancel = "\ng_sell_cancel_level   = g_lh;                   // cancel if price breaks above the bounce LH" if use_hl_break else ""
+    _store_sell_bars   = "\ng_pending_sell_bars   = 0;" if use_max_bars else ""
+
+    # Step-2: lines to reset cancel state when a new swing invalidates an existing order
+    _reset_buy_cancel  = "\n        g_buy_cancel_level = 0.0;" if use_hl_break else ""
+    _reset_buy_bars    = "\n        g_pending_buy_bars = 0;"   if use_max_bars else ""
+    _reset_sell_cancel = "\n        g_sell_cancel_level = 0.0;" if use_hl_break else ""
+    _reset_sell_bars   = "\n        g_pending_sell_bars = 0;"   if use_max_bars else ""
+
+    # Break-even tracking globals and OnTick step (conditional on breakeven_r)
+    _be_globals = ""
+    _be_init    = ""
+    _be_step    = ""
+    if breakeven_r:
+        be_sl_r = float(breakeven_sl_r)
+        if be_sl_r == 0.0:
+            be_target    = "entry price (break-even, 0R)"
+            new_sl_long  = "entry"
+            new_sl_short = "entry"
+        elif be_sl_r > 0:
+            be_target    = f"entry + {be_sl_r} × init_dist (locking {be_sl_r}R profit)"
+            new_sl_long  = f"entry + {be_sl_r} * init_dist"
+            new_sl_short = f"entry - {be_sl_r} * init_dist"
+        else:
+            be_target    = f"entry − {abs(be_sl_r)} × init_dist (partial loss cut to {be_sl_r}R)"
+            new_sl_long  = f"entry + {be_sl_r} * init_dist"
+            new_sl_short = f"entry - {be_sl_r} * init_dist"
+
+        _be_globals = (
+            f"// Break-even position tracking ({max_positions} slot(s))\n"
+            f"ulong  g_be_tickets[{max_positions}]    // tickets of open positions being monitored\n"
+            f"double g_be_init_dist[{max_positions}]  // |entry − SL| recorded at position open\n"
+            f"bool   g_be_done[{max_positions}]       // true once SL has been moved for this trade\n"
+            f"int    g_be_count                        // slots in use\n"
+        )
+        _be_init = "\nInitialise break-even arrays: `g_be_count = 0`; zero-fill `g_be_tickets` and `g_be_init_dist`; fill `g_be_done` with `false`.\n"
+        _be_step = f"""### Step 0.5 — Break-even SL management (runs every tick, before new-bar guard)
+
+Scan all open positions for this symbol + magic number:
+
+**1. Sync array** — remove any slot where the position ticket no longer appears in `PositionsTotal()`:
+```
+for each slot i in 0..g_be_count-1:
+    if !PositionSelectByTicket(g_be_tickets[i]):
+        // position closed — compact array (shift remaining slots down)
+        g_be_count--;
+```
+
+**2. Register new positions** — for any open position whose ticket is NOT in `g_be_tickets[]`:
+```
+if(g_be_count < {max_positions}) {{
+    g_be_tickets[g_be_count]  = ticket;
+    g_be_init_dist[g_be_count] = MathAbs(PositionGetDouble(POSITION_PRICE_OPEN)
+                                         - PositionGetDouble(POSITION_SL));
+    g_be_done[g_be_count]     = false;
+    g_be_count++;
+}}
+```
+
+**3. Check trigger** — for each tracked slot where `g_be_done[i] == false`:
+```
+double entry      = PositionGetDouble(POSITION_PRICE_OPEN);
+double init_dist  = g_be_init_dist[i];
+double trigger    = {breakeven_r} * init_dist;
+double current_tp = PositionGetDouble(POSITION_TP);
+
+if(PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {{
+    if(SymbolInfoDouble(_Symbol, SYMBOL_BID) >= entry + trigger) {{
+        double new_sl = NormalizeDouble({new_sl_long}, _Digits);
+        trade.PositionModify(_Symbol, new_sl, current_tp);
+        g_be_done[i] = true;
+    }}
+}}
+else {{
+    if(SymbolInfoDouble(_Symbol, SYMBOL_ASK) <= entry - trigger) {{
+        double new_sl = NormalizeDouble({new_sl_short}, _Digits);
+        trade.PositionModify(_Symbol, new_sl, current_tp);
+        g_be_done[i] = true;
+    }}
+}}
+```
+
+SL is moved to **{be_target}**. Fires at most once per trade (`g_be_done` prevents re-triggering).
+
+"""
+
+    # EMA indicator setup
+    _TF_MAP = {"M1": "PERIOD_M1", "M5": "PERIOD_M5", "M15": "PERIOD_M15",
+               "H1": "PERIOD_H1", "H4": "PERIOD_H4", "D1": "PERIOD_D1"}
+    if ema_tf == "same":
+        ema_init   = f"iMA(_Symbol, PERIOD_CURRENT, {ema_p}, 0, MODE_EMA, PRICE_CLOSE)"
+        ema_label  = f"EMA({ema_p}) on the chart timeframe"
+    else:
+        tf_const   = _TF_MAP.get(ema_tf, f"PERIOD_{ema_tf}")
+        ema_init   = f"iMA(_Symbol, {tf_const}, {ema_p}, 0, MODE_EMA, PRICE_CLOSE)"
+        ema_label  = f"EMA({ema_p}) on the {ema_tf} timeframe (higher-timeframe trend filter)"
+
+    ema_copy = (
+        f"double ema_buf[];\n"
+        f"ArraySetAsSeries(ema_buf, true);\n"
+        f"if(CopyBuffer(g_ema_handle, 0, 0, 3, ema_buf) < 3) return;\n"
+        f"double ema1 = ema_buf[1];   // {ema_label}, aligned to bar[1]"
+    )
+
+    # SL formula strings — computed from the stop-entry level and stored swing points
+    sl_long_formula, sl_short_formula = {
+        "swing_midpoint": (
+            "(g_last_sh + g_hl) / 2.0",
+            "(g_last_sl + g_lh) / 2.0",
+        ),
+        "swing_point": (
+            "g_hl",
+            "g_lh",
+        ),
+        "signal_candle": (
+            "low[1]",     # low of the HL-confirmation bar (bar where swing low was confirmed)
+            "high[1]",    # high of the LH-confirmation bar (bar where swing high was confirmed)
+        ),
+    }.get(sl_mode, ("low[1]", "high[1]"))
+
+    sl_mode_desc = {
+        "swing_midpoint": "midpoint between the breakout level (H1/L1) and the pullback/bounce point (HL/LH)",
+        "swing_point":    "at the pullback low (HL) for longs / bounce high (LH) for shorts",
+        "signal_candle":  "low of the HL-confirmation bar for longs / high of the LH-confirmation bar for shorts",
+    }.get(sl_mode, sl_mode)
+
+    return f"""## Strategy: N Structure Breakout
+## Platform: MetaTrader {mt_ver} ({lang})
+## Instrument: {params.get('symbol', 'XAUUSD')}
+## Timeframe: {params.get('timeframe', 'H1')}
+
+### Backtest Performance
+{perf}
+
+### Parameters
+{param_lines_str}
+
+---
+
+## Strategy Overview
+
+The N Structure Breakout identifies a three-point swing pattern and enters via a **pending stop order**
+placed at the breakout level the moment the structure is armed — no waiting for a close confirmation.
+
+**Bullish N (Buy setup):**
+1. Swing High H1 forms — highest high of {swing_n} bars on each side.
+2. Price pulls back to a Swing Low HL *after* H1 (confirmed swing low below H1).
+3. **Structure armed:** when HL is confirmed AND `close[1] < g_last_sh` (price hasn't broken out yet)
+   AND `close[1] > EMA({ema_p})` → place a **Buy Stop** pending order at `g_last_sh`.
+
+**Bearish Inverted-N (Sell setup):**
+1. Swing Low L1 forms — lowest low of {swing_n} bars on each side.
+2. Price bounces to a Swing High LH *after* L1 (confirmed swing high above L1).
+3. **Structure armed:** when LH is confirmed AND `close[1] > g_last_sl` (price hasn't broken down yet)
+   AND `close[1] < EMA({ema_p})` → place a **Sell Stop** pending order at `g_last_sl`.
+
+Entry fills automatically when price reaches the stop level. SL and TP are anchored to the stop price
+(not the bar close), so the RR ratio is exact at fill.
+
+SL mode: **{sl_mode}** — {sl_mode_desc}.
+TP: `stop_price ± rr_ratio × (stop_price − SL)`.
+
+---
+
+## Input Groups
+
+Group all `input` variables using `input group "..."` (MQL5) or string separator inputs (MQL4):
+- `"=== Signal Generation ==="` — ema_period, ema_timeframe, swing_n, rr_ratio, sl_mode
+- `"=== Pending Order ==="` — pending_cancel, max_pending_bars (only relevant when cancel mode uses bar expiry)
+- `"=== Session Filter ==="` — sessions (display label)
+- `"=== Sideways Filter ==="` — sideways_filter and its sub-parameters
+- `"=== Risk Management ==="` — risk_pct, risk_recovery, max_positions, compound, breakeven_r, max_sl_per_period, sl_period
+- `"=== Execution ==="` — magic_number, commission_per_lot
+
+---
+
+## Global State
+
+```
+int      g_ema_handle            // EMA indicator handle — created in OnInit
+datetime g_last_bar_time         // new-bar guard
+double   g_last_sh               // most recent confirmed swing high H1  (0.0 = none)
+double   g_hl                    // pullback low  HL after H1             (0.0 = not yet formed)
+double   g_last_sl               // most recent confirmed swing low  L1   (0.0 = none)
+double   g_lh                    // bounce high   LH after L1             (0.0 = not yet formed)
+ulong    g_pending_buy_ticket    // ticket of active Buy Stop order   (0 = none)
+ulong    g_pending_sell_ticket   // ticket of active Sell Stop order  (0 = none)
+{_cancel_globals}{_be_globals}```
+
+Initialise all `g_` doubles to 0.0, tickets to 0, and counters to 0 in OnInit. Reset in OnDeinit / OnTester.{_be_init}
+---
+
+
+## OnInit
+
+Create indicator handle:
+```
+g_ema_handle = {ema_init};
+if (g_ema_handle == INVALID_HANDLE) return INIT_FAILED;
+```
+
+---
+
+## OnTick Logic
+
+{_be_step}### Step 1 — New-bar guard
+Compare `iTime(_Symbol, PERIOD_CURRENT, 0)` with `g_last_bar_time`. If same bar → return.
+Update `g_last_bar_time` and proceed.
+
+### Step 2 — Update swing-point state
+
+Compute buffer size and candidate index as **MQL5 runtime variables** from the `swing_n` input.
+Do NOT hardcode these — they must adapt when the user changes `swing_n` in EA settings.
+
+**CRITICAL — declare dynamic arrays and call ArraySetAsSeries BEFORE CopyXxx:**
+```
+int   cand       = swing_n + 1;        // series index of the swing candidate bar
+int   total_bars = 2 * swing_n + 2;    // swing_n each side + candidate + one extra
+if(Bars(_Symbol, PERIOD_CURRENT) < total_bars + 5) return;
+
+double high[], low[], close[];
+ArraySetAsSeries(high,  true);   // MUST be set before CopyXxx so index 0 = current bar
+ArraySetAsSeries(low,   true);
+ArraySetAsSeries(close, true);
+if(CopyHigh (_Symbol, PERIOD_CURRENT, 0, total_bars, high)  < total_bars) return;
+if(CopyLow  (_Symbol, PERIOD_CURRENT, 0, total_bars, low)   < total_bars) return;
+if(CopyClose(_Symbol, PERIOD_CURRENT, 0, total_bars, close) < total_bars) return;
+```
+
+In series order: index 0=current bar, index 1=last closed bar, index cand=candidate ({swing_n + 1} bars back).
+Right side (more recent) = indices 1..cand-1; left side (older) = indices cand+1..2*swing_n+1. No lookahead.
+
+Track two flags this bar: `bool sh_just_fired = false` and `bool sl_just_fired = false`.
+
+**Check for Swing High (H1 candidate):**
+```
+bool is_sh = true;
+for(int k = 1; k <= swing_n; k++) {{
+    if(high[cand] <= high[cand - k]) {{ is_sh = false; break; }}  // right side (more recent)
+    if(high[cand] <= high[cand + k]) {{ is_sh = false; break; }}  // left side  (older)
+}}
+if(is_sh) {{
+    double sh_p = high[cand];
+    g_last_sh = sh_p;
+    g_hl = 0.0;                                  // reset — need fresh HL after new H1
+    sh_just_fired = true;
+    // cancel any outstanding buy stop — structure invalidated by new H1
+    if(g_pending_buy_ticket > 0) {{
+        trade.OrderDelete(g_pending_buy_ticket);
+        g_pending_buy_ticket = 0;{_reset_buy_cancel}{_reset_buy_bars}
+    }}
+    if(g_last_sl > 0.0 && sh_p > g_last_sl)
+        g_lh = sh_p;                             // this SH also qualifies as LH for bearish N
+}}
+```
+
+**Check for Swing Low (L1 candidate):**
+```
+bool is_sl = true;
+for(int k = 1; k <= swing_n; k++) {{
+    if(low[cand] >= low[cand - k]) {{ is_sl = false; break; }}   // right side
+    if(low[cand] >= low[cand + k]) {{ is_sl = false; break; }}   // left side
+}}
+if(is_sl) {{
+    double sl_p = low[cand];
+    g_last_sl = sl_p;
+    g_lh = 0.0;                                  // reset — need fresh LH after new L1
+    sl_just_fired = true;
+    // cancel any outstanding sell stop — structure invalidated by new L1
+    if(g_pending_sell_ticket > 0) {{
+        trade.OrderDelete(g_pending_sell_ticket);
+        g_pending_sell_ticket = 0;{_reset_sell_cancel}{_reset_sell_bars}
+    }}
+    if(g_last_sh > 0.0 && sl_p < g_last_sh)
+        g_hl = sl_p;                             // this SL also qualifies as HL for bullish N
+}}
+```
+
+> Always run the swing-high check first, then the swing-low check — matching the Python backtest loop order.
+
+### Step 2.5 — Cancel stale pending stop orders
+
+{_cancel_step}
+
+### Step 3 — Skip if at position limit
+If open positions for this symbol + magic number ≥ max_positions → return.
+
+### Step 4 — Session filter
+{session_sec}
+
+### Step 5 — EMA trend filter
+```
+{ema_copy}
+bool in_uptrend   = (close[1] > ema1);
+bool in_downtrend = (close[1] < ema1);
+```
+
+### Step 6 — Sideways filter
+{filter_desc}
+
+### Step 7 — Arm structure: place pending stop orders
+
+**Arm BUY STOP** — all of the following must be true:
+- `sl_just_fired` (HL was confirmed this bar)
+- `g_last_sh > 0.0` (have a confirmed H1)
+- `g_hl > 0.0` (HL is set — the pullback is in place)
+- `close[1] < g_last_sh` (price has NOT yet broken above H1)
+- `g_pending_buy_ticket == 0` (no existing buy stop for this setup)
+- `in_uptrend` (EMA filter)
+- Sideways filter: long direction allowed
+
+**Arm SELL STOP** — all of the following must be true:
+- `sh_just_fired` (LH was confirmed this bar)
+- `g_last_sl > 0.0` (have a confirmed L1)
+- `g_lh > 0.0` (LH is set — the bounce is in place)
+- `close[1] > g_last_sl` (price has NOT yet broken below L1)
+- `g_pending_sell_ticket == 0` (no existing sell stop for this setup)
+- `in_downtrend` (EMA filter)
+- Sideways filter: short direction allowed
+
+### Step 8 — Period SL limit check
+Before placing any order, verify the period SL count is within limit (see Risk Management section).
+
+### Step 9 — Order placement (pending stop orders)
+
+SL and TP are anchored to the **stop price** (the breakout level), not the current bar close.
+This matches the Python backtest where `dist = entry_stop − sl_price` and `tp = entry_stop + rr × dist`.
+
+**BUY STOP at g_last_sh:**
+```
+double stop_price = g_last_sh;
+double sl         = {sl_long_formula};
+double sl_dist    = stop_price - sl;            // distance from breakout level to SL
+// Guard: sl_dist > 0
+double tp         = stop_price + {rr} * sl_dist;
+double ask        = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+// Guard: stop_price > ask (stop must be above current price)
+double lots       = ComputeLots(stop_price, sl);
+trade.BuyStop(lots, stop_price, _Symbol, sl, tp, ORDER_TIME_GTC, 0, "NS_BUY_STOP");
+g_pending_buy_ticket  = trade.ResultOrder();{_store_buy_cancel}{_store_buy_bars}
+g_hl = 0.0;                                     // reset — need new structure before arming again
+```
+
+**SELL STOP at g_last_sl:**
+```
+double stop_price = g_last_sl;
+double sl         = {sl_short_formula};
+double sl_dist    = sl - stop_price;            // distance from breakout level to SL
+// Guard: sl_dist > 0
+double tp         = stop_price - {rr} * sl_dist;
+double bid        = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+// Guard: stop_price < bid (stop must be below current price)
+double lots       = ComputeLots(stop_price, sl);
+trade.SellStop(lots, stop_price, _Symbol, sl, tp, ORDER_TIME_GTC, 0, "NS_SELL_STOP");
+g_pending_sell_ticket = trade.ResultOrder();{_store_sell_cancel}{_store_sell_bars}
+g_lh = 0.0;                                     // reset — need new structure before arming again
+```
+
+### Step 10 — Sync filled/cancelled pending tickets
+
+After the new-bar logic, check whether `g_pending_buy_ticket` or `g_pending_sell_ticket` are
+still live (use `OrderSelect` or iterate `OrdersTotal()`). If an order no longer exists
+(filled or externally cancelled), reset the ticket, cancel level, and bar counter to 0.
+
+---
+
+{_risk_block(params, lang)}
+
+---
+
+{_code_req(lang, mt_ver)}"""
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -882,6 +1387,8 @@ def _build_prompt(strategy: str, params: dict, results: dict, platform: str) -> 
         return _prompt_momentum_candle(params, lang, mt_ver, perf, param_lines_str)
     elif strategy == "order_block_smc":
         return _prompt_order_block_smc(params, lang, mt_ver, perf, param_lines_str)
+    elif strategy == "n_structure":
+        return _prompt_n_structure(params, lang, mt_ver, perf, param_lines_str)
     else:
         return _prompt_william_fractals(params, lang, mt_ver, perf, param_lines_str)
 
@@ -973,7 +1480,7 @@ def generate_ea(req: EARequest) -> EAResponse:
     client = anthropic.Anthropic(api_key=api_key)
 
     message = client.messages.create(
-        model="claude-opus-4-7",
+        model="claude-opus-4-6",
         max_tokens=8192,
         system=(
             "You are an expert MetaTrader developer. "

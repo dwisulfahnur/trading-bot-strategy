@@ -74,6 +74,7 @@ class Trade:
     exit_reason: str = ""   # "tp", "sl", "be", "end_of_data"
     pnl_r: float = 0.0      # P&L in R-multiples
     year: int = 0
+    hold_period: float = 0.0  # seconds from entry to exit
     # Internal simulation state (not serialised)
     _initial_sl_dist: float = 0.0
     _be_active: bool = False
@@ -325,9 +326,64 @@ def simulate(
                     cancelled_this_bar = True
 
         if pending is not None and len(positions) < max_positions:
+            stop_price  = pending.get("entry_stop")
             limit_price = pending.get("entry_limit")
 
-            if limit_price is not None:
+            if stop_price is not None:
+                # Stop order: long fills when high >= stop_price, short when low <= stop_price
+                cancel_level = pending.get("cancel_level")
+                if has_ticks:
+                    if pending["signal"] == 1:
+                        fill_idxs   = np.where(bar_asks >= stop_price)[0]
+                        touched     = len(fill_idxs) > 0
+                        entry_price = float(bar_asks[fill_idxs[0]]) if touched else None
+                        # Cancel if price breaks below HL (setup invalidated)
+                        cancelled   = (cancel_level is not None
+                                       and len(np.where(bar_bids < cancel_level)[0]) > 0)
+                    else:
+                        fill_idxs   = np.where(bar_bids <= stop_price)[0]
+                        touched     = len(fill_idxs) > 0
+                        entry_price = float(bar_bids[fill_idxs[0]]) if touched else None
+                        # Cancel if price breaks above LH (setup invalidated)
+                        cancelled   = (cancel_level is not None
+                                       and len(np.where(bar_asks > cancel_level)[0]) > 0)
+                else:
+                    spread = bar.get("avg_spread") or 0.0
+                    if pending["signal"] == 1:
+                        touched   = bar["high"] >= stop_price
+                        cancelled = cancel_level is not None and bar["low"] < cancel_level
+                        entry_price = stop_price + spread
+                    else:
+                        touched   = bar["low"] <= stop_price
+                        cancelled = cancel_level is not None and bar["high"] > cancel_level
+                        entry_price = stop_price
+
+                if touched:
+                    sl_dist = abs(entry_price - pending["sl"])
+                    if sl_dist > 0:
+                        positions.append(Trade(
+                            direction=pending["signal"],
+                            entry_time=bar["time"],
+                            entry_price=entry_price,
+                            sl=pending["sl"],
+                            tp=pending["tp"],
+                            year=bar.get("_year", 0),
+                            _initial_sl_dist=sl_dist,
+                        ))
+                    pending = None
+                    pending_bars = 0
+                elif cancelled:
+                    pending = None
+                    pending_bars = 0
+                    cancelled_this_bar = True
+                else:
+                    pending_bars += 1
+                    if max_pending_bars is not None and pending_bars >= max_pending_bars:
+                        pending = None
+                        pending_bars = 0
+                        cancelled_this_bar = True
+
+            elif limit_price is not None:
                 if has_ticks:
                     # Tick-based fill / cancel — resolve ordering precisely
                     if pending["signal"] == 1:
@@ -459,6 +515,7 @@ def simulate(
                 pos.exit_price  = pos.tp
                 pos.exit_reason = "tp"
                 pos.pnl_r       = abs(pos.tp - pos.entry_price) / pos._initial_sl_dist
+                pos.hold_period = (pos.exit_time - pos.entry_time).total_seconds()
                 trades.append(pos)
                 positions.remove(pos)
             elif hit_sl:
@@ -477,6 +534,7 @@ def simulate(
                             _current_period_key = pk
                             _period_sl_count = 0
                         _period_sl_count += 1
+                pos.hold_period = (pos.exit_time - pos.entry_time).total_seconds()
                 trades.append(pos)
                 positions.remove(pos)
 
@@ -503,6 +561,7 @@ def simulate(
         if sl_dist > 0:
             diff = (last["close"] - pos.entry_price) * pos.direction
             pos.pnl_r = diff / sl_dist
+        pos.hold_period = (pos.exit_time - pos.entry_time).total_seconds()
         trades.append(pos)
 
     trades.sort(key=lambda t: t.exit_time)
@@ -513,21 +572,24 @@ def simulate(
 # Metrics
 # ---------------------------------------------------------------------------
 
-def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float, compound: bool = True, commission_per_lot: float = 3.5, symbol: str = "XAUUSD") -> dict:
+def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float, risk_recovery: float = 0.0, compound: bool = True, commission_per_lot: float = 3.5, symbol: str = "XAUUSD") -> dict:
     if not trades:
         return {}
 
     # Equity curve + trade log
     capital      = initial_capital
     risk_amount  = initial_capital * risk_pct   # fixed for non-compound
+    risk_amount_recovery = initial_capital * risk_recovery  # reduced when underwater
     peak         = capital
     max_dd       = 0.0
+    max_dd_from_initial = 0.0
     equity_curve = []
     trade_log    = []
     stopped_out  = False
 
     for i, t in enumerate(trades):
-        risk_at_entry  = capital * risk_pct if compound else risk_amount
+        applied_risk = risk_pct if capital >= initial_capital else (risk_recovery if risk_recovery > 0 else risk_pct)
+        risk_at_entry  = capital * applied_risk if compound else (risk_amount_recovery if capital < initial_capital and risk_recovery > 0 else risk_amount)
         if symbol not in PAIR_CONFIG:
             raise ValueError(f"Symbol '{symbol}' not found in PAIR_CONFIG. Add it to backtest.py before running.")
         contract_size  = PAIR_CONFIG[symbol]["contract_size"]
@@ -541,6 +603,11 @@ def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float
         dd = (peak - capital) / peak * 100 if peak > 0 else 100.0
         if dd > max_dd:
             max_dd = dd
+
+        # max drawdown measured from initial capital
+        dd_from_initial = (initial_capital - capital) / initial_capital * 100 if initial_capital > 0 else 0.0
+        if dd_from_initial > max_dd_from_initial:
+            max_dd_from_initial = dd_from_initial
 
         equity_curve.append({
             "trade":       i + 1,
@@ -562,6 +629,7 @@ def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float
             "exit_time":      str(t.exit_time),
             "exit_price":     round(t.exit_price, 3),
             "exit_reason":    t.exit_reason,
+            "hold_period":    round(t.hold_period, 1),
             "pnl_r":          round(t.pnl_r, 4),
             "lot_size":       lot_size,
             "commission_usd": commission_usd,
@@ -608,7 +676,9 @@ def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float
         per_year[str(yr)] = {
             "total_trades": len(yt),
             "win_rate_pct": round(len(yw) / len(yt) * 100, 2) if yt else 0.0,
-            "return_pct":   round(sum(t.pnl_r for t in yt) * risk_pct * 100, 4),
+            "return_pct":   round(sum(
+                tl["profit_usd"] for tl in trade_log if tl["year"] == yr
+            ) / initial_capital * 100, 4),
         }
 
     pair_cfg = PAIR_CONFIG[symbol]
@@ -620,7 +690,9 @@ def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float
         "initial_capital":    initial_capital,
         "final_capital":      capital,
         "max_drawdown_pct":   round(max_dd, 4),
+        "max_drawdown_from_initial_pct": round(max_dd_from_initial, 4),
         "risk_pct":           risk_pct,
+        "risk_recovery_pct":  risk_recovery,
         "commission_per_lot": commission_per_lot,
         "avg_win_r":          avg_win,
         "avg_loss_r":         avg_loss,
@@ -654,9 +726,14 @@ def print_report(metrics: dict, strategy_name: str, timeframe: str, years: list[
     print(f"  Profit factor     : {metrics['profit_factor']:.2f}")
     print(f"  Total return      : {metrics['total_return_pct']:+.1f}%  "
           f"(${metrics['initial_capital']:,.0f} → ${metrics['final_capital']:,.0f})")
-    print(f"  Max drawdown      : -{metrics['max_drawdown_pct']:.1f}%")
+    print(f"  Max drawdown      : -{metrics['max_drawdown_pct']:.1f}%  (peak-to-trough)")
+    print(f"  Max DD from init  : -{metrics.get('max_drawdown_from_initial_pct', 0.0):.1f}%  (vs initial capital)")
     compounding_label = "compounding" if metrics.get("compound", True) else "fixed (no compound)"
-    print(f"  Risk per trade    : {metrics['risk_pct'] * 100:.1f}%  [{compounding_label}]")
+    recovery_risk = metrics.get('risk_recovery_pct', 0.0)
+    if recovery_risk > 0:
+        print(f"  Risk per trade    : {metrics['risk_pct'] * 100:.1f}%  →  {recovery_risk * 100:.1f}% when underwater  [{compounding_label}]")
+    else:
+        print(f"  Risk per trade    : {metrics['risk_pct'] * 100:.1f}%  [{compounding_label}]")
     print(f"  Avg win / Avg loss: {metrics['avg_win_r']:.2f}R / {metrics['avg_loss_r']:.2f}R")
     print(SEP)
 
@@ -727,6 +804,7 @@ def save_result(
             "symbol":            symbol,
             "initial_capital":   metrics.get("initial_capital"),
             "risk_pct":          metrics.get("risk_pct"),
+            "risk_recovery":      metrics.get("risk_recovery_pct", 0.0),
             "compound":          metrics.get("compound", True),
             "commission_per_lot": metrics.get("commission_per_lot", 3.5),
             "breakeven_r":        metrics.get("breakeven_r"),
@@ -762,6 +840,8 @@ def parse_args() -> argparse.Namespace:
                    help="Initial capital in USD")
     p.add_argument("--risk",           type=float, default=0.01,
                    help="Fraction of capital risked per trade (0.01 = 1%%)")
+    p.add_argument("--risk_recovery", type=float, default=0.005,
+                   help="Reduced risk %% applied when current capital is below initial capital (0.005 = 0.5%%)")
 
     # William Fractals strategy params
     p.add_argument("--ema_period",     type=int,   default=200,
@@ -795,7 +875,10 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--tp_mult",         type=float, default=1.0,
                    help="TP distance as multiple of MC range (default: 1.0 = full range)")
     p.add_argument("--max_pending_bars", type=int,  default=5,
-                   help="Cancel limit order after this many bars without fill (default: 5)")
+                   help="Cancel limit/stop order after this many bars without fill (default: 5)")
+    p.add_argument("--pending_cancel",  type=str,  default="max_bars",
+                   choices=["none", "max_bars", "hl_break", "both"],
+                   help="N Structure stop-order cancellation mode (default: max_bars)")
     p.add_argument("--sessions",        type=str,   default="all",
                    help="Trading sessions to allow signals in. "
                         "Options: all, asia, london, newyork, "
@@ -860,15 +943,24 @@ def main() -> None:
     print("Simulating trades ...")
     breakeven_r    = args.breakeven_r
     breakeven_sl_r = args.breakeven_sl_r if breakeven_r is not None else 0.0
-    max_pending_bars = args.max_pending_bars if args.strategy == "momentum_candle" else None
+    if args.strategy == "momentum_candle":
+        max_pending_bars = args.max_pending_bars
+    elif args.strategy == "n_structure":
+        pending_cancel = args.pending_cancel
+        max_pending_bars = (
+            args.max_pending_bars if pending_cancel in ("max_bars", "both") else None
+        )
+    else:
+        max_pending_bars = None
     trades = simulate(df, tick_data=tick_data, breakeven_r=breakeven_r, breakeven_sl_r=breakeven_sl_r, max_pending_bars=max_pending_bars, max_positions=args.max_positions)
     print(f"  {len(trades)} trades executed")
 
     compound = not args.no_compound
-    metrics = compute_metrics(trades, args.capital, args.risk, compound=compound, commission_per_lot=args.commission, symbol=symbol)
+    metrics = compute_metrics(trades, args.capital, args.risk, risk_recovery=args.risk_recovery, compound=compound, commission_per_lot=args.commission, symbol=symbol)
     metrics["compound"]       = compound
     metrics["breakeven_r"]    = breakeven_r
     metrics["breakeven_sl_r"] = breakeven_sl_r
+    metrics["risk_recovery"]  = args.risk_recovery
     print_report(metrics, strategy.name, args.timeframe, args.years)
 
     out_path = save_result(metrics, strategy.name, strategy_params, args.timeframe, args.years, symbol=symbol)

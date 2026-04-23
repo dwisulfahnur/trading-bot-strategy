@@ -40,6 +40,7 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
         symbol = request_data.get("symbol", "XAUUSD")
         initial_capital = request_data["initial_capital"]
         risk_pct = request_data["risk_pct"]
+        risk_recovery = request_data.get("risk_recovery", 0.0)
         compound = request_data["compound"]
         breakeven_r    = request_data.get("breakeven_r", None)
         breakeven_sl_r = request_data.get("breakeven_sl_r", 0.0)
@@ -68,7 +69,16 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
             .alias("signal")
         )
 
-        max_pending_bars = int(params.get("max_pending_bars", 5)) if strategy_name == "momentum_candle" else None
+        if strategy_name == "momentum_candle":
+            max_pending_bars = int(params.get("max_pending_bars", 5))
+        elif strategy_name == "n_structure":
+            pending_cancel = params.get("pending_cancel", "max_bars")
+            max_pending_bars = (
+                int(params.get("max_pending_bars", 10))
+                if pending_cancel in ("max_bars", "both") else None
+            )
+        else:
+            max_pending_bars = None
         trades = simulate(
             df,
             tick_data=tick_data,
@@ -80,7 +90,7 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
             max_positions=max_positions,
         )
 
-        metrics = compute_metrics(trades, initial_capital, risk_pct, compound=compound, commission_per_lot=commission_per_lot, symbol=symbol)
+        metrics = compute_metrics(trades, initial_capital, risk_pct, risk_recovery=risk_recovery, compound=compound, commission_per_lot=commission_per_lot, symbol=symbol)
         metrics["compound"]       = compound
         metrics["breakeven_r"]    = breakeven_r
         metrics["breakeven_sl_r"] = breakeven_sl_r
@@ -93,6 +103,7 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
             "max_sl_per_period": max_sl_per_period,
             "sl_period": sl_period,
             "max_positions": max_positions,
+            "risk_recovery": risk_recovery,
         }
         out_path = save_result(metrics, strategy_name, params_with_sim, timeframe, years, symbol=symbol)
         result_id = out_path.stem

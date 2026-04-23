@@ -37,6 +37,9 @@ class NStructureStrategy(BaseStrategy):
         swing_n: int = 5,
         rr_ratio: float = 2.0,
         sl_mode: str = "swing_midpoint",
+        # Pending order cancellation
+        pending_cancel: str = "max_bars",
+        max_pending_bars: int = 10,
         # Market session filter
         sessions: str = "all",
         # Sideways filter
@@ -61,6 +64,8 @@ class NStructureStrategy(BaseStrategy):
         self.swing_n = swing_n
         self.rr_ratio = rr_ratio
         self.sl_mode = sl_mode
+        self.pending_cancel = pending_cancel
+        self.max_pending_bars = max_pending_bars
         self.sessions = sessions
         self.sideways_filter = sideways_filter
         self.adx_period = adx_period
@@ -98,12 +103,14 @@ class NStructureStrategy(BaseStrategy):
 
         df = self._add_sideways_filter(df)
 
-        signals, sl_prices, tp_prices = self._scan_n_structure(df)
+        signals, sl_prices, tp_prices, entry_stops, cancel_levels = self._scan_n_structure(df)
 
         df = df.with_columns([
-            pl.Series("signal",  signals,   dtype=pl.Int8),
-            pl.Series("sl",      sl_prices, dtype=pl.Float64),
-            pl.Series("tp",      tp_prices, dtype=pl.Float64),
+            pl.Series("signal",        signals,       dtype=pl.Int8),
+            pl.Series("sl",            sl_prices,     dtype=pl.Float64),
+            pl.Series("tp",            tp_prices,     dtype=pl.Float64),
+            pl.Series("entry_stop",    entry_stops,   dtype=pl.Float64),
+            pl.Series("cancel_level",  cancel_levels, dtype=pl.Float64),
         ])
 
         df = df.drop(["_sh", "_sl", "_trend_ok_long", "_trend_ok_short"])
@@ -156,9 +163,9 @@ class NStructureStrategy(BaseStrategy):
         confirmed = mask.shift(n)
         return pl.when(confirmed).then(pl.col("low").shift(n)).otherwise(None)
 
-    def _scan_n_structure(self, df: pl.DataFrame) -> tuple[list, list, list]:
+    def _scan_n_structure(self, df: pl.DataFrame) -> tuple[list, list, list, list, list]:
         """
-        Iterate bar-by-bar to detect N structure breakouts.
+        Iterate bar-by-bar to arm stop-entry orders for N structure breakouts.
 
         Bullish N state:
           last_sh — most recent confirmed swing high (H1)
@@ -168,13 +175,10 @@ class NStructureStrategy(BaseStrategy):
           last_sl — most recent confirmed swing low (L1)
           lh      — most recent swing high AFTER last_sl (the bounce / LH)
 
-        When a new SH fires it simultaneously:
-          - resets the bullish chain (need a fresh HL after this new H1)
-          - supplies the LH for the bearish chain (bounce above L1)
-
-        When a new SL fires it simultaneously:
-          - resets the bearish chain (need a fresh LH after this new L1)
-          - supplies the HL for the bullish chain (pullback below H1)
+        Signal fires when the N structure becomes ARMED (HL or LH just confirmed),
+        placing a stop-entry order AT the breakout level (H1 or L1).
+        cancel_level = hl (long) / lh (short): if price breaks this level the setup
+        is invalidated and the pending order is cancelled.
         """
         sh_arr         = df["_sh"].to_list()
         sl_arr         = df["_sl"].to_list()
@@ -185,10 +189,12 @@ class NStructureStrategy(BaseStrategy):
         trend_ok_long  = df["_trend_ok_long"].to_list()
         trend_ok_short = df["_trend_ok_short"].to_list()
 
-        n_bars   = len(close)
-        signals  = [0]    * n_bars
-        sl_out   = [None] * n_bars
-        tp_out   = [None] * n_bars
+        n_bars         = len(close)
+        signals        = [0]    * n_bars
+        sl_out         = [None] * n_bars
+        tp_out         = [None] * n_bars
+        entry_stops    = [None] * n_bars
+        cancel_levels  = [None] * n_bars
 
         last_sh: float | None = None   # H1 of bullish N
         hl:      float | None = None   # pullback low after H1
@@ -196,33 +202,39 @@ class NStructureStrategy(BaseStrategy):
         lh:      float | None = None   # bounce high after L1
 
         for i in range(n_bars):
-            c      = close[i]
-            prev_c = close[i - 1] if i > 0 else c
+            c = close[i]
+
+            long_just_armed  = False
+            short_just_armed = False
 
             # ── Update swing-point state ──────────────────────────────────
 
             if sh_arr[i] is not None:
-                sh_p = sh_arr[i]
+                sh_p    = sh_arr[i]
                 last_sh = sh_p
-                hl = None                               # need fresh HL after new H1
+                hl      = None                          # need fresh HL after new H1
                 if last_sl is not None and sh_p > last_sl:
-                    lh = sh_p                           # this SH is the LH for short N
+                    lh              = sh_p              # this SH is the LH for short N
+                    short_just_armed = True
 
             if sl_arr[i] is not None:
-                sl_p = sl_arr[i]
+                sl_p    = sl_arr[i]
                 last_sl = sl_p
-                lh = None                               # need fresh LH after new L1
+                lh      = None                          # need fresh LH after new L1
+                short_just_armed = False                # lh reset, short arm cancelled
                 if last_sh is not None and sl_p < last_sh:
-                    hl = sl_p                           # this SL is the HL for long N
+                    hl              = sl_p              # this SL is the HL for long N
+                    long_just_armed = True
 
-            # ── Bullish N breakout ────────────────────────────────────────
-            if (last_sh is not None
+            # ── Arm bullish stop-buy at H1 when HL is confirmed ──────────
+            if (long_just_armed
+                    and last_sh is not None
                     and hl is not None
-                    and c > last_sh
-                    and prev_c <= last_sh               # first bar to close above H1
-                    and c > ema[i]                      # uptrend confirmation
+                    and c < last_sh                     # breakout hasn't happened yet
+                    and c > ema[i]
                     and trend_ok_long[i]):
 
+                entry_stop = last_sh
                 if self.sl_mode == "swing_midpoint":
                     sl_price = (last_sh + hl) / 2.0
                 elif self.sl_mode == "swing_point":
@@ -230,21 +242,24 @@ class NStructureStrategy(BaseStrategy):
                 else:                                   # signal_candle
                     sl_price = low[i]
 
-                dist = c - sl_price
+                dist = entry_stop - sl_price
                 if dist > 0:
-                    signals[i] = 1
-                    sl_out[i]  = sl_price
-                    tp_out[i]  = c + self.rr_ratio * dist
-                    hl = None                           # reset: need new N before next long
+                    signals[i]     = 1
+                    entry_stops[i] = entry_stop
+                    sl_out[i]      = sl_price
+                    tp_out[i]      = entry_stop + self.rr_ratio * dist
+                    if self.pending_cancel in ("hl_break", "both"):
+                        cancel_levels[i] = hl           # cancel if price breaks below HL
 
-            # ── Bearish N breakout (inverted N) ──────────────────────────
-            elif (last_sl is not None
+            # ── Arm bearish stop-sell at L1 when LH is confirmed ─────────
+            elif (short_just_armed
+                    and last_sl is not None
                     and lh is not None
-                    and c < last_sl
-                    and prev_c >= last_sl               # first bar to close below L1
-                    and c < ema[i]                      # downtrend confirmation
+                    and c > last_sl                     # breakdown hasn't happened yet
+                    and c < ema[i]
                     and trend_ok_short[i]):
 
+                entry_stop = last_sl
                 if self.sl_mode == "swing_midpoint":
                     sl_price = (last_sl + lh) / 2.0
                 elif self.sl_mode == "swing_point":
@@ -252,11 +267,13 @@ class NStructureStrategy(BaseStrategy):
                 else:                                   # signal_candle
                     sl_price = high[i]
 
-                dist = sl_price - c
+                dist = sl_price - entry_stop
                 if dist > 0:
-                    signals[i] = -1
-                    sl_out[i]  = sl_price
-                    tp_out[i]  = c - self.rr_ratio * dist
-                    lh = None                           # reset: need new N before next short
+                    signals[i]     = -1
+                    entry_stops[i] = entry_stop
+                    sl_out[i]      = sl_price
+                    tp_out[i]      = entry_stop - self.rr_ratio * dist
+                    if self.pending_cancel in ("hl_break", "both"):
+                        cancel_levels[i] = lh           # cancel if price breaks above LH
 
-        return signals, sl_out, tp_out
+        return signals, sl_out, tp_out, entry_stops, cancel_levels

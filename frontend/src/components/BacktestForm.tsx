@@ -172,10 +172,15 @@ const PARAM_META: Record<string, ParamInfo> = {
     description:
       'Take-profit distance = this × MC range from the near extreme. 1.0 = full range (TP at the candle extreme in the signal direction). Increase for a wider target.',
   },
+  pending_cancel: {
+    label: 'Pending Cancel Mode',
+    description:
+      'Controls when an unfilled stop order is cancelled. "Max bars" expires after N bars. "HL/LH break" cancels if the pullback level is broken (setup invalidated). "Both" cancels on whichever comes first. "None" keeps the order open until filled.',
+  },
   max_pending_bars: {
     label: 'Max Pending Bars',
     description:
-      'Automatically cancel the limit order after this many bars if it has not been filled. Prevents stale orders from filling during irrelevant market conditions.',
+      'Cancel the pending stop order after this many bars without a fill. Only active when cancel mode is "Max bars" or "Both".',
   },
   sessions: {
     label: 'Session Filter',
@@ -351,6 +356,31 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
       params: ['require_fvg', 'require_ote', 'ote_fib_low', 'ote_fib_high'],
     },
   ],
+  n_structure: [
+    {
+      title: 'Signal Generation',
+      params: ['ema_period', 'ema_timeframe', 'swing_n', 'rr_ratio', 'sl_mode'],
+    },
+    {
+      title: 'Pending Order',
+      params: ['pending_cancel', 'max_pending_bars'],
+    },
+    {
+      title: 'Session Filter',
+      params: ['sessions'],
+    },
+    {
+      title: 'Sideways Filter',
+      params: [
+        'sideways_filter',
+        'adx_period', 'adx_threshold',
+        'ema_slope_period', 'ema_slope_min',
+        'choppiness_period', 'choppiness_max',
+        'alligator_jaw', 'alligator_teeth', 'alligator_lips',
+        'stochrsi_rsi_period', 'stochrsi_stoch_period', 'stochrsi_oversold', 'stochrsi_overbought',
+      ],
+    },
+  ],
   momentum_candle: [
     {
       title: 'Signal Generation',
@@ -396,6 +426,12 @@ const OPTION_LABELS: Record<string, Record<string, string>> = {
     choppiness:  'Choppiness Index',
     alligator:   'Alligator — line alignment',
     stochrsi:    'Stoch RSI — pullback zone',
+  },
+  pending_cancel: {
+    none:     'None — stay open until filled',
+    max_bars: 'Max bars — expire after N bars',
+    hl_break: 'HL/LH break — cancel if structure invalidated',
+    both:     'Both — whichever comes first',
   },
   sessions: {
     all:                 'All sessions (no filter)',
@@ -458,6 +494,7 @@ export function BacktestForm({ onResult, initialParams }: Props) {
   const [timeframe, setTimeframe] = useState('H1');
   const [capital, setCapital] = useState(10000);
   const [riskPct, setRiskPct] = useState(2);
+  const [riskRecovery, setRiskRecovery] = useState(0);
   const [compound, setCompound] = useState(false);
   const [breakevenOn, setBreakevenOn] = useState(false);
   const [breakevenR, setBreakevenR] = useState(1.0);
@@ -567,6 +604,7 @@ export function BacktestForm({ onResult, initialParams }: Props) {
         symbol: selectedSymbol,
         initial_capital: capital,
         risk_pct: riskPct / 100,
+        risk_recovery: riskRecovery / 100,
         compound,
         breakeven_r:    breakevenOn ? breakevenR : null,
         breakeven_sl_r: breakevenOn ? breakevenSlR : 0.0,
@@ -727,6 +765,28 @@ export function BacktestForm({ onResult, initialParams }: Props) {
         />
         <div className="flex justify-between text-xs text-slate-500 mt-1">
           <span>0.5%</span>
+          <span>5%</span>
+        </div>
+      </div>
+
+      {/* Risk Recovery when underwater */}
+      <div>
+        <label className="block text-sm font-medium text-slate-300 mb-1">
+          Recovery Risk %{' '}
+          <span className="text-blue-400 font-bold">{riskRecovery}%</span>
+          <InfoTooltip text="Reduced risk % applied when current capital falls below the initial capital. Set to 0 to disable." />
+        </label>
+        <input
+          type="range"
+          min={0}
+          max={5}
+          step={0.5}
+          value={riskRecovery}
+          onChange={(e) => setRiskRecovery(Number(e.target.value))}
+          className="w-full accent-blue-500"
+        />
+        <div className="flex justify-between text-xs text-slate-500 mt-1">
+          <span>Disabled (0%)</span>
           <span>5%</span>
         </div>
       </div>
@@ -911,6 +971,8 @@ export function BacktestForm({ onResult, initialParams }: Props) {
 
           const requireOte = (stratParams['require_ote'] ?? false) as boolean;
 
+          const currentPendingCancel = (stratParams['pending_cancel'] ?? 'max_bars') as string;
+
           const isVisible = (name: string): boolean => {
             if (name.startsWith('adx_'))        return currentFilter === 'adx';
             if (name.startsWith('ema_slope_'))  return currentFilter === 'ema_slope';
@@ -919,6 +981,7 @@ export function BacktestForm({ onResult, initialParams }: Props) {
             if (name.startsWith('stochrsi_'))   return currentFilter === 'stochrsi';
             if (name.startsWith('mc_'))         return mcFilterOn;
             if (name.startsWith('ote_'))        return requireOte;
+            if (name === 'max_pending_bars')    return currentPendingCancel === 'max_bars' || currentPendingCancel === 'both';
             return true;
           };
 
