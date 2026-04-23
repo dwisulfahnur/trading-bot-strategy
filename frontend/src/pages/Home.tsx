@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { useNavigate, useSearchParams } from 'react-router-dom';
 import { useQuery } from '@tanstack/react-query';
 import { BacktestForm } from '../components/BacktestForm';
@@ -23,6 +23,18 @@ export function Home() {
   const [highlightedTrade, setHighlightedTrade] = useState<number | null>(null);
   const [activeTab, setActiveTab] = useState<'equity' | 'price' | 'trades' | 'stats'>('equity');
   const [showEAModal, setShowEAModal] = useState(false);
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+
+  const allTrades = result?.results?.trades ?? [];
+  const filteredTrades = useMemo(() => {
+    if (!fromDate && !toDate) return allTrades;
+    return allTrades.filter((t) => {
+      if (fromDate && t.entry_time < fromDate) return false;
+      if (toDate && t.entry_time > `${toDate}T23:59:59`) return false;
+      return true;
+    });
+  }, [allTrades, fromDate, toDate]);
 
   // Save state
   const [saveName, setSaveName] = useState('');
@@ -266,20 +278,26 @@ export function Home() {
                         highlightedTrade={highlightedTrade !== null ? result.results.trades[highlightedTrade]?.trade : null}
                       />
                     </div>
-                    <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-                      <h3 className="text-sm font-semibold text-slate-400 mb-4">Pip Curve</h3>
-                      <PipCurve trades={result.results.trades} />
-                    </div>
                   </div>
                 )}
 
                 {activeTab === 'price' && (
                   <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-                    <h3 className="text-sm font-semibold text-slate-400 mb-4">Price Chart with Trades</h3>
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-sm font-semibold text-slate-400">Price Chart with Trades</h3>
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="text-slate-500">Date range:</span>
+                        <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-200 focus:border-indigo-500 focus:outline-none" />
+                        <span className="text-slate-600">–</span>
+                        <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-200 focus:border-indigo-500 focus:outline-none" />
+                        {(fromDate || toDate) && <button onClick={() => { setFromDate(''); setToDate(''); }} className="text-slate-500 hover:text-slate-300 ml-1">✕</button>}
+                        <span className="text-slate-600 ml-1">{filteredTrades.length}/{allTrades.length}</span>
+                      </div>
+                    </div>
                     {bars.length > 0 ? (
                       <PriceChart
                         bars={bars}
-                        trades={result.results.trades}
+                        trades={filteredTrades}
                         highlightedTrade={highlightedTrade}
                         onTradeClick={(idx) => setHighlightedTrade(idx)}
                         emaPeriod={result.parameters.ema_period as number}
@@ -294,11 +312,20 @@ export function Home() {
 
                 {activeTab === 'trades' && (
                   <div className="bg-slate-900 border border-slate-800 rounded-2xl p-4">
-                    <h3 className="text-sm font-semibold text-slate-400 mb-4">
-                      Trade Log ({result.results.total_trades} trades)
-                    </h3>
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="text-sm font-semibold text-slate-400">
+                        Trade Log ({filteredTrades.length} / {allTrades.length} trades)
+                      </h3>
+                      <div className="flex items-center gap-2 text-xs">
+                        <span className="text-slate-500">Date range:</span>
+                        <input type="date" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-200 focus:border-indigo-500 focus:outline-none" />
+                        <span className="text-slate-600">–</span>
+                        <input type="date" value={toDate} onChange={(e) => setToDate(e.target.value)} className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-200 focus:border-indigo-500 focus:outline-none" />
+                        {(fromDate || toDate) && <button onClick={() => { setFromDate(''); setToDate(''); }} className="text-slate-500 hover:text-slate-300 ml-1">✕</button>}
+                      </div>
+                    </div>
                     <TradeTable
-                      trades={result.results.trades}
+                      trades={filteredTrades}
                       highlightedTrade={highlightedTrade}
                       onTradeClick={handleTradeClick}
                       pipMult={result.results.pip_mult}

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useMemo } from 'react';
 import {
   ComposedChart,
   Bar,
@@ -14,6 +14,20 @@ import type { TradeRecord } from '../api/types';
 
 type GroupBy = 'session' | 'hour' | 'day' | 'month';
 type Metric  = 'r' | 'pips';
+
+// ── Date range filter ────────────────────────────────────────────────────────
+function toDateInputValue(v: string): string {
+  return v ? v.slice(0, 10) : '';
+}
+
+function filterByDateRange(trades: TradeRecord[], from: string, to: string): TradeRecord[] {
+  if (!from && !to) return trades;
+  return trades.filter((t) => {
+    if (from && t.entry_time < from) return false;
+    if (to && t.entry_time > `${to}T23:59:59`) return false;
+    return true;
+  });
+}
 
 // ── Pip calculation ────────────────────────────────────────────────────────
 // pipMult converts raw price diff → pips (e.g. XAUUSD: 10.0, meaning 1 price unit = 10 pips)
@@ -190,11 +204,42 @@ interface Props { trades: TradeRecord[]; pipMult?: number }
 
 export function TradeStatsTable({ trades, pipMult = 10.0 }: Props) {
   const [metric, setMetric] = useState<Metric>('r');
+  const [fromDate, setFromDate] = useState('');
+  const [toDate, setToDate] = useState('');
+
+  const filtered = useMemo(() => filterByDateRange(trades, fromDate, toDate), [trades, fromDate, toDate]);
 
   if (trades.length === 0) return null;
 
   return (
     <div className="space-y-6">
+      {/* Date range filter */}
+      <div className="flex items-center gap-3 text-xs">
+        <span className="text-slate-500 font-medium">Date range:</span>
+        <input
+          type="date"
+          value={toDateInputValue(fromDate)}
+          onChange={(e) => setFromDate(e.target.value)}
+          className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-200 focus:border-indigo-500 focus:outline-none"
+        />
+        <span className="text-slate-600">–</span>
+        <input
+          type="date"
+          value={toDateInputValue(toDate)}
+          onChange={(e) => setToDate(e.target.value)}
+          className="bg-slate-800 border border-slate-600 rounded px-2 py-1 text-slate-200 focus:border-indigo-500 focus:outline-none"
+        />
+        {(fromDate || toDate) && (
+          <button
+            onClick={() => { setFromDate(''); setToDate(''); }}
+            className="text-slate-500 hover:text-slate-300 ml-1"
+          >
+            ✕
+          </button>
+        )}
+        <span className="text-slate-600 ml-2">{filtered.length} / {trades.length} trades</span>
+      </div>
+
       {/* R / Pips switch */}
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div className="flex items-center gap-4">
@@ -220,7 +265,7 @@ export function TradeStatsTable({ trades, pipMult = 10.0 }: Props) {
       {/* 2-per-row distribution grid */}
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
         {GROUPS.map(({ key, title }) => {
-          const buckets = computeBuckets(trades, key, pipMult);
+          const buckets = computeBuckets(filtered, key, pipMult);
           return (
             <div key={key} className="bg-slate-800/40 border border-slate-700/60 rounded-xl p-4">
               <p className="text-xs font-semibold text-slate-400 uppercase tracking-wide mb-1">{title}</p>
