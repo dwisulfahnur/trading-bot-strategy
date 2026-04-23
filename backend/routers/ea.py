@@ -155,30 +155,90 @@ def _risk_block(params: dict, lang: str) -> str:
         else "Not configured — use general risk when underwater"
     )
 
-    initial_capital = float(params.get("initial_capital", 10000))
+    initial_capital      = float(params.get("initial_capital", 10000))
+    commission_per_lot_v = float(params.get("commission_per_lot", 3.5))
+
     if risk_recovery > 0:
         if compound:
             lot_formula = (
-                f"`active_risk_pct / (sl_distance × {contract_size:,})`  "
-                f"where `active_risk_pct = balance × {risk_pct_pct:.1f}% / 100` "
-                f"when balance ≥ initial_capital, else `balance × {risk_recovery:.1f}% / 100`"
+                f"`active_risk_amount / (sl_distance × {contract_size:,})`  "
+                f"where `active_risk_amount = AccountInfoDouble(ACCOUNT_BALANCE) × {risk_pct_pct:.1f}% / 100` "
+                f"when balance ≥ g_initial_capital, else `AccountInfoDouble(ACCOUNT_BALANCE) × {risk_recovery:.1f}% / 100`"
             )
         else:
             lot_formula = (
                 f"`active_risk_amount / (sl_distance × {contract_size:,})`  "
-                f"where `active_risk_amount = {initial_capital:.0f} × {risk_pct_pct:.1f}% / 100` "
-                f"when balance ≥ initial_capital, else `{initial_capital:.0f} × {risk_recovery:.1f}% / 100` (fixed, no compounding)"
+                f"where `active_risk_amount = InpInitialCapital × {risk_pct_pct:.1f}% / 100` (default {initial_capital:.0f}) "
+                f"when balance ≥ g_initial_capital, else `InpInitialCapital × {risk_recovery:.1f}% / 100` (fixed, no compounding)"
             )
         recovery_impl = (
-            f"  - Store `g_initial_capital` at EA start (first tick `AccountInfoDouble(ACCOUNT_BALANCE)`).\n"
-            f"  - Before every lot calculation: if `AccountInfoDouble(ACCOUNT_BALANCE) < g_initial_capital` use recovery risk, else use normal risk.\n"
+            f"  - In `OnInit`: store `g_initial_capital = AccountInfoDouble(ACCOUNT_BALANCE)` — do NOT read balance inside OnTick for this.\n"
+            f"  - Before every lot calculation: compare `AccountInfoDouble(ACCOUNT_BALANCE)` against `g_initial_capital` to pick the active risk percentage.\n"
         )
     else:
         if compound:
-            lot_formula = f"`(balance × {risk_pct_pct:.1f}% / 100) / (sl_distance × {contract_size:,})`"
+            lot_formula = (
+                f"`(AccountInfoDouble(ACCOUNT_BALANCE) × {risk_pct_pct:.1f}% / 100) / (sl_distance × {contract_size:,})`"
+            )
         else:
-            lot_formula = f"`({initial_capital:.0f} × {risk_pct_pct:.1f}% / 100) / (sl_distance × {contract_size:,})` (fixed initial balance, no compounding)"
+            lot_formula = (
+                f"`(InpInitialCapital × {risk_pct_pct:.1f}% / 100) / (sl_distance × {contract_size:,})` "
+                f"(InpInitialCapital default {initial_capital:.0f} — fixed lot size, no compounding)"
+            )
         recovery_impl = ""
+
+    compute_lots_spec = (
+        f"\n### ComputeLots Helper Function\n"
+        f"Implement `double ComputeLots(double entry, double sl)` — call this before every order placement:\n"
+        f"```\n"
+        f"double ComputeLots(double entry, double sl) {{\n"
+        f"    double sl_dist = MathAbs(entry - sl);\n"
+        f"    if(sl_dist < _Point) return 0.0;   // zero SL distance guard\n"
+        f"    double balance = AccountInfoDouble(ACCOUNT_BALANCE);  // use Balance, not Equity\n"
+    )
+    if risk_recovery > 0:
+        compute_lots_spec += (
+            f"    bool underwater = (balance < g_initial_capital);\n"
+        )
+        if compound:
+            compute_lots_spec += (
+                f"    double risk_pct = underwater ? InpRiskRecovery : InpRiskPct;\n"
+                f"    double risk_amount = balance * risk_pct;\n"
+            )
+        else:
+            compute_lots_spec += (
+                f"    double risk_pct = underwater ? InpRiskRecovery : InpRiskPct;\n"
+                f"    double risk_amount = InpInitialCapital * risk_pct;\n"
+            )
+    else:
+        if compound:
+            compute_lots_spec += (
+                f"    double risk_amount = balance * InpRiskPct;\n"
+            )
+        else:
+            compute_lots_spec += (
+                f"    double risk_amount = InpInitialCapital * InpRiskPct;\n"
+            )
+    compute_lots_spec += (
+        f"    double lots = risk_amount / (sl_dist * {contract_size});\n"
+        f"    double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);\n"
+        f"    lots = MathFloor(lots / step) * step;\n"
+        f"    return MathMax(SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN),\n"
+        f"                   MathMin(lots, SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX)));\n"
+        f"}}\n"
+        f"```\n"
+        f"- Use `ACCOUNT_BALANCE` (not `ACCOUNT_EQUITY`) — this matches the backtest which only updates capital after a trade closes, not on open unrealized P&L.\n"
+        f"- `InpRiskPct` and `InpRiskRecovery` are fraction inputs (e.g. 0.02 for 2%), not percentages.\n"
+        f"- For non-compound mode, expose `InpInitialCapital` as an `input double` (default {initial_capital:.0f}).\n"
+    )
+
+    commission_note = (
+        f"- Commission: {commission_per_lot_v:.2f} USD per lot per side "
+        f"(round-trip cost = lots × {commission_per_lot_v:.2f} × 2 per trade). "
+        f"Expose `InpCommissionPerLot` as an `input double` (default {commission_per_lot_v:.2f}). "
+        f"In ECN/STP accounts the broker charges commission automatically on fills — "
+        f"the input is informational only and no manual deduction is needed in the EA logic.\n"
+    )
 
     return (
         f"## Risk Management\n"
@@ -187,10 +247,12 @@ def _risk_block(params: dict, lang: str) -> str:
         f"- Max open positions: {params.get('max_positions', 1)}\n"
         f"- Lot size: {lot_formula}\n"
         f"  - {symbol} contract_size = {contract_size:,} per lot\n"
-        f"  - sl_distance = absolute price difference of entry to SL\n"
-        f"  - Clamp to broker min/max lot, round to lot step\n"
+        f"  - sl_distance = absolute price difference of entry to SL (measured from fill/stop price, not bar close)\n"
+        f"  - Clamp to broker min/max lot size, round down to lot step\n"
         f"{recovery_impl}"
         f"- Compounding: {compound_label}\n"
+        f"- {commission_note}"
+        + compute_lots_spec
         + _breakeven_section(breakeven_r, breakeven_sl_r)
         + _sl_limit_section(max_sl, sl_period)
     )
@@ -1247,7 +1309,8 @@ if(is_sh) {{
     sh_just_fired = true;
     // cancel any outstanding buy stop — structure invalidated by new H1
     if(g_pending_buy_ticket > 0) {{
-        trade.OrderDelete(g_pending_buy_ticket);
+        if(OrderSelect(g_pending_buy_ticket))   // guard: only call Delete if still pending (may have already filled)
+            trade.OrderDelete(g_pending_buy_ticket);
         g_pending_buy_ticket = 0;{_reset_buy_cancel}{_reset_buy_bars}
     }}
     if(g_last_sl > 0.0 && sh_p > g_last_sl)
@@ -1269,7 +1332,8 @@ if(is_sl) {{
     sl_just_fired = true;
     // cancel any outstanding sell stop — structure invalidated by new L1
     if(g_pending_sell_ticket > 0) {{
-        trade.OrderDelete(g_pending_sell_ticket);
+        if(OrderSelect(g_pending_sell_ticket))   // guard: only call Delete if still pending (may have already filled)
+            trade.OrderDelete(g_pending_sell_ticket);
         g_pending_sell_ticket = 0;{_reset_sell_cancel}{_reset_sell_bars}
     }}
     if(g_last_sh > 0.0 && sl_p < g_last_sh)
@@ -1477,18 +1541,35 @@ def generate_ea(req: EARequest) -> EAResponse:
     if not api_key:
         raise HTTPException(500, "ANTHROPIC_API_KEY is not configured — add it to the .env file")
 
-    client = anthropic.Anthropic(api_key=api_key)
-
-    message = client.messages.create(
-        model="claude-opus-4-6",
-        max_tokens=8192,
-        system=(
-            "You are an expert MetaTrader developer. "
-            "You write production-quality, compilable MQL4 and MQL5 code. "
-            "Output only raw source code — no markdown, no explanations."
-        ),
-        messages=[{"role": "user", "content": prompt}],
+    client = anthropic.Anthropic(
+        api_key=api_key,
+        timeout=600.0,   # EA prompts are large — allow up to 10 min
+        max_retries=3,   # retry on transient connection errors
     )
+
+    try:
+        message = client.messages.create(
+            model="claude-opus-4-6",
+            max_tokens=8192,
+            system=(
+                "You are an expert MetaTrader developer. "
+                "You write production-quality, compilable MQL4 and MQL5 code. "
+                "Output only raw source code — no markdown, no explanations."
+            ),
+            messages=[{"role": "user", "content": prompt}],
+        )
+    except anthropic.APIConnectionError as exc:
+        raise HTTPException(
+            503,
+            f"Could not reach the Anthropic API — check your network connection and try again. ({exc})",
+        ) from exc
+    except anthropic.RateLimitError as exc:
+        raise HTTPException(429, f"Anthropic rate limit reached — wait a moment and retry. ({exc})") from exc
+    except anthropic.APIStatusError as exc:
+        raise HTTPException(
+            502,
+            f"Anthropic API returned an error (HTTP {exc.status_code}): {exc.message}",
+        ) from exc
 
     code = _strip_fences(message.content[0].text)
 
