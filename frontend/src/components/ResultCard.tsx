@@ -154,6 +154,16 @@ export function ResultCard({ results, stoppedOut }: Props) {
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
         <Panel title="Drawdown">
           <StatRow
+            label="Max DD (peak-to-trough)"
+            value={max_drawdown_pct > 0 ? `-${max_drawdown_pct.toFixed(2)}%` : '—'}
+            color={max_drawdown_pct < 5 ? 'text-slate-200' : 'text-red-400'}
+          />
+          <StatRow
+            label="Max DD vs Initial"
+            value={`-${(results.max_drawdown_from_initial_pct ?? 0).toFixed(2)}%`}
+            color={(results.max_drawdown_from_initial_pct ?? 0) < 20 ? 'text-slate-200' : 'text-red-400'}
+          />
+          <StatRow
             label="Max Daily DD"
             value={maxDailyDd > 0 ? `-${maxDailyDd.toFixed(2)}%` : '—'}
             color={maxDailyDd < 5 ? 'text-slate-200' : 'text-red-400'}
@@ -177,6 +187,13 @@ export function ResultCard({ results, stoppedOut }: Props) {
             label="Trades"
             value={`${total_trades} · ${(risk_pct * 100).toFixed(1)}% risk${compound ? ' (comp.)' : ''}`}
           />
+          {results.risk_recovery_pct > 0 && (
+            <StatRow
+              label="Recovery Risk"
+              value={`${(results.risk_recovery_pct * 100).toFixed(1)}% when underwater`}
+              color="text-amber-400"
+            />
+          )}
           <StatRow
             label="Avg Hold"
             value={holdTimes.length ? fmtDuration(avgHold) : '—'}

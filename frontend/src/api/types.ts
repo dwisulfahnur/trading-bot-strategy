@@ -71,6 +71,7 @@ export interface ResultSummary {
   total_return_pct: number;
   win_rate_pct: number;
   max_drawdown_pct: number;
+  max_drawdown_from_initial_pct: number;
   profit_factor: number;
   total_trades: number;
   parameters: Record<string, unknown>;
@@ -96,6 +97,7 @@ export interface TradeRecord {
   exit_time: string;
   exit_price: number;
   exit_reason: 'tp' | 'sl' | 'be' | 'end_of_data';
+  hold_period: number;  // seconds from entry to exit
   pnl_r: number;
   lot_size: number;
   commission_usd: number;
@@ -111,7 +113,9 @@ export interface BacktestResults {
   initial_capital: number;
   final_capital: number;
   max_drawdown_pct: number;
+  max_drawdown_from_initial_pct: number;
   risk_pct: number;
+  risk_recovery_pct: number;
   avg_win_r: number;
   avg_loss_r: number;
   max_consec_wins: number;

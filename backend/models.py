@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 # ---------------------------------------------------------------------------
@@ -16,6 +16,7 @@ class BacktestRequest(BaseModel):
     symbol: str = "XAUUSD"
     initial_capital: float = Field(default=10_000, gt=0)
     risk_pct: float = Field(default=0.02, gt=0, le=1)
+    risk_recovery: float = Field(default=0.0, ge=0, le=1)
     compound: bool = False
     breakeven_r: float | None = None
     breakeven_sl_r: float = 0.0
@@ -24,6 +25,15 @@ class BacktestRequest(BaseModel):
     sl_period: str = "none"
     max_positions: int = Field(default=1, ge=1, le=10)
     params: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def recovery_must_be_lower_than_risk(self) -> "BacktestRequest":
+        if self.risk_recovery > 0 and self.risk_recovery >= self.risk_pct:
+            raise ValueError(
+                f"risk_recovery ({self.risk_recovery}) must be less than risk_pct ({self.risk_pct}) "
+                "— recovery risk is meant to reduce exposure when underwater, not increase it."
+            )
+        return self
 
 
 # ---------------------------------------------------------------------------
@@ -70,6 +80,7 @@ class TradeRecord(BaseModel):
     exit_time: str
     exit_price: float
     exit_reason: str
+    hold_period: float  # seconds
     pnl_r: float
     lot_size: float
     commission_usd: float
@@ -94,6 +105,7 @@ class ResultSummary(BaseModel):
     total_return_pct: float
     win_rate_pct: float
     max_drawdown_pct: float
+    max_drawdown_from_initial_pct: float
     profit_factor: float
     total_trades: int
     parameters: dict[str, Any] = Field(default_factory=dict)
