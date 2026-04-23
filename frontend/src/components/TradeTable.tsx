@@ -17,7 +17,7 @@ const EXIT_COLORS: Record<string, string> = {
   end_of_data: 'bg-slate-700 text-slate-400',
 };
 
-type SortKey = keyof TradeRecord | 'profit_pips';
+type SortKey = keyof TradeRecord | 'profit_pips' | 'hold_period';
 type FilterDirection = 'all' | 'long' | 'short';
 type FilterExit = 'all' | 'tp' | 'sl' | 'be' | 'end_of_data';
 
@@ -39,10 +39,10 @@ const COLUMNS: ColDef[] = [
   { key: 'sl',           label: 'SL',            defaultVisible: true  },
   { key: 'tp',           label: 'TP',            defaultVisible: true  },
   { key: 'exit_time',    label: 'Exit Time',     defaultVisible: true  },
+  { key: 'hold_period',  label: 'Hold Period',   defaultVisible: true  },
   { key: 'exit_price',   label: 'Exit',          defaultVisible: true  },
   { key: 'exit_reason',  label: 'Reason',        defaultVisible: true  },
   { key: 'lot_size',     label: 'Lot',           defaultVisible: true  },
-  { key: 'pnl_r',        label: 'R',             defaultVisible: false },
   { key: 'profit_pips',  label: 'Pips',          defaultVisible: true  },
   { key: 'profit_usd',   label: 'Profit (USD)',  defaultVisible: true  },
   { key: 'capital_after',label: 'Capital',       defaultVisible: true  },
@@ -108,6 +108,9 @@ export function TradeTable({ trades, highlightedTrade, onTradeClick, pipMult = 1
     if (sortKey === 'profit_pips') {
       av = tradePips(a, pipMult);
       bv = tradePips(b, pipMult);
+    } else if (sortKey === 'hold_period') {
+      av = a.hold_period;
+      bv = b.hold_period;
     } else {
       av = a[sortKey as keyof TradeRecord] as number | string;
       bv = b[sortKey as keyof TradeRecord] as number | string;
@@ -239,6 +242,11 @@ export function TradeTable({ trades, highlightedTrade, onTradeClick, pipMult = 1
                   Exit Time<SortIcon k="exit_time" />
                 </th>
               )}
+              {show('hold_period') && (
+                <th onClick={() => handleSort('hold_period')} className="px-3 py-2 cursor-pointer select-none hover:text-slate-200 whitespace-nowrap">
+                  Hold Period<SortIcon k="hold_period" />
+                </th>
+              )}
               {show('exit_price') && (
                 <th onClick={() => handleSort('exit_price')} className="px-3 py-2 cursor-pointer select-none hover:text-slate-200 whitespace-nowrap">
                   Exit<SortIcon k="exit_price" />
@@ -303,6 +311,15 @@ export function TradeTable({ trades, highlightedTrade, onTradeClick, pipMult = 1
                   {show('sl') && <td className="px-3 py-2 text-red-400">{t.sl.toFixed(2)}</td>}
                   {show('tp') && <td className="px-3 py-2 text-emerald-400">{t.tp.toFixed(2)}</td>}
                   {show('exit_time') && <td className="px-3 py-2 text-slate-400 whitespace-nowrap">{t.exit_time.slice(0, 16)}</td>}
+                  {show('hold_period') && (
+                    <td className="px-3 py-2 text-slate-300">
+                      {t.hold_period < 60
+                        ? `${t.hold_period.toFixed(0)}s`
+                        : t.hold_period < 3600
+                        ? `${(t.hold_period / 60).toFixed(1)}m`
+                        : `${(t.hold_period / 3600).toFixed(1)}h`}
+                    </td>
+                  )}
                   {show('exit_price') && <td className="px-3 py-2 text-slate-100">{t.exit_price.toFixed(2)}</td>}
                   {show('exit_reason') && (
                     <td className="px-3 py-2">
