@@ -93,20 +93,20 @@ function Panel({ title, children }: { title: string; children: React.ReactNode }
 
 export function ResultCard({ results, stoppedOut }: Props) {
   const {
-    total_return_pct,
-    win_rate_pct,
-    profit_factor,
-    max_drawdown_pct,
-    total_trades,
-    risk_pct,
-    initial_capital,
-    final_capital,
-    avg_win_r,
-    avg_loss_r,
-    max_consec_wins,
-    max_consec_losses,
-    compound,
-    trades,
+    total_return_pct = 0,
+    win_rate_pct = 0,
+    profit_factor = 0,
+    max_drawdown_pct = 0,
+    total_trades = 0,
+    risk_pct = 0,
+    initial_capital = 0,
+    final_capital = 0,
+    avg_win_r = 0,
+    avg_loss_r = 0,
+    max_consec_wins = 0,
+    max_consec_losses = 0,
+    compound = false,
+    trades = [],
   } = results;
 
   const maxDailyDd = computePeriodDrawdown(trades, initial_capital, (t) => t.exit_time.slice(0, 10));

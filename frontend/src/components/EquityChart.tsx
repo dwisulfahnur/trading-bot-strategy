@@ -141,7 +141,7 @@ function StatCard({ label, value, valueClass = 'text-slate-100', sub }: StatCard
 }
 
 export function EquityChart({ data, initialCapital, stoppedOut, onTradeClick, highlightedTrade }: Props) {
-  if (!data.length) return null;
+  if (!data?.length) return null;
 
   const lastCapital  = stoppedOut ? 0 : data[data.length - 1].capital;
   const isProfit     = lastCapital >= initialCapital;

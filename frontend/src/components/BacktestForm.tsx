@@ -227,6 +227,32 @@ const PARAM_META: Record<string, ParamInfo> = {
       'Number of buy/sell zones placed on each side of the center EMA. Level 1 is closest to center (center ± 1 step), level N is furthest. Deeper levels catch larger mean-reversion moves.',
   },
 
+  // Range Breakout
+  range_lookback: {
+    label: 'Range Lookback',
+    description: 'Number of bars used to define the range high and range low. Larger values capture wider, more significant consolidation zones.',
+  },
+  range_mode: {
+    label: 'Range Mode',
+    description: 'Rolling: range recalculates fresh on every bar. Fixed: after a breakout signal the range locks in, suppressing new signals for "range lookback" bars to let a new range form.',
+  },
+  atr_multiplier: {
+    label: 'ATR Multiplier (tightness)',
+    description: 'Skip signals when the range height exceeds this multiple of ATR. Prevents trading false breakouts from already-wide volatile candles. Set to 0 to disable.',
+  },
+  breakout_type: {
+    label: 'Breakout Type',
+    description: 'Close: bar must fully close above/below the range boundary. HL: a high or low touch is enough to trigger — fires earlier but catches more false breakouts.',
+  },
+  allow_reentry: {
+    label: 'Allow Re-entry',
+    description: 'ON: fire a signal on every qualifying bar (including consecutive ones). OFF: once a direction breaks out, suppress new signals in that direction until price returns inside the range.',
+  },
+  sl_buffer: {
+    label: 'SL Buffer (price)',
+    description: 'Extra distance added beyond the range boundary for the stop-loss. e.g. 0.5 places SL 0.5 below range low (longs) or 0.5 above range high (shorts). Gives the trade more breathing room.',
+  },
+
   // Order Block (SMC)
   structure_period: {
     label: 'Structure Period',
@@ -381,6 +407,39 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
       ],
     },
   ],
+  range_breakout: [
+    {
+      title: 'Range Definition',
+      params: ['range_lookback', 'range_mode', 'atr_period', 'atr_multiplier'],
+    },
+    {
+      title: 'Entry',
+      params: ['breakout_type', 'allow_reentry'],
+    },
+    {
+      title: 'Exit',
+      params: ['sl_buffer', 'rr_ratio'],
+    },
+    {
+      title: 'Trend Filter',
+      params: ['ema_period', 'ema_timeframe'],
+    },
+    {
+      title: 'Session Filter',
+      params: ['sessions'],
+    },
+    {
+      title: 'Sideways Filter',
+      params: [
+        'sideways_filter',
+        'adx_period', 'adx_threshold',
+        'ema_slope_period', 'ema_slope_min',
+        'choppiness_period', 'choppiness_max',
+        'alligator_jaw', 'alligator_teeth', 'alligator_lips',
+        'stochrsi_rsi_period', 'stochrsi_stoch_period', 'stochrsi_oversold', 'stochrsi_overbought',
+      ],
+    },
+  ],
   momentum_candle: [
     {
       title: 'Signal Generation',
@@ -418,6 +477,14 @@ const OPTION_LABELS: Record<string, Record<string, string>> = {
     H1:    'H1',
     H4:    'H4',
     D1:    'D1 (Daily)',
+  },
+  range_mode: {
+    rolling: 'Rolling — fresh each bar',
+    fixed:   'Fixed — locked after breakout',
+  },
+  breakout_type: {
+    close: 'Close — bar must close outside range',
+    hl:    'High/Low — touch is enough',
   },
   sideways_filter: {
     none:        'None — no filter',
@@ -629,186 +696,194 @@ export function BacktestForm({ onResult, initialParams }: Props) {
   const availableTimeframes = symbolData?.timeframes ?? ['M1', 'M5', 'M15', 'H1'];
 
   return (
-    <form onSubmit={handleSubmit} className="space-y-6">
-      {/* Strategy selector */}
-      <div>
-        <label className="block text-sm font-medium text-slate-300 mb-1">Strategy</label>
-        <select
-          value={strategy}
-          onChange={(e) => setStrategy(e.target.value)}
-          className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-slate-100 focus:outline-none focus:border-blue-500"
-        >
-          {strategies.map((s) => (
-            <option key={s.name} value={s.name}>
-              {s.display_name}
-            </option>
-          ))}
-        </select>
-      </div>
+    <form onSubmit={handleSubmit} className="space-y-4">
 
-      {/* Symbol selector */}
-      <div>
-        <label className="block text-sm font-medium text-slate-300 mb-2">Symbol</label>
-        <Select
-          options={availableSymbols.map((sym) => ({ value: sym, label: sym }))}
-          value={{ value: selectedSymbol, label: selectedSymbol }}
-          onChange={(opt) => opt && setSelectedSymbol(opt.value)}
-          isSearchable
-          styles={{
-            control: (base, state) => ({
-              ...base,
-              backgroundColor: '#1e293b',
-              borderColor: state.isFocused ? '#3b82f6' : '#475569',
-              borderRadius: '0.5rem',
-              boxShadow: 'none',
-              '&:hover': { borderColor: '#64748b' },
-            }),
-            menu: (base) => ({
-              ...base,
-              backgroundColor: '#1e293b',
-              border: '1px solid #475569',
-              borderRadius: '0.5rem',
-              overflow: 'hidden',
-            }),
-            option: (base, state) => ({
-              ...base,
-              backgroundColor: state.isSelected
-                ? '#2563eb'
-                : state.isFocused
-                ? '#334155'
-                : 'transparent',
-              color: state.isSelected ? '#fff' : '#cbd5e1',
-              fontSize: '0.875rem',
-              cursor: 'pointer',
-            }),
-            singleValue: (base) => ({ ...base, color: '#f1f5f9', fontSize: '0.875rem' }),
-            input: (base) => ({ ...base, color: '#f1f5f9', fontSize: '0.875rem' }),
-            indicatorSeparator: () => ({ display: 'none' }),
-            dropdownIndicator: (base) => ({ ...base, color: '#64748b', padding: '0 6px' }),
-          }}
-        />
-      </div>
+      {/* ── Backtest Setup ─────────────────────────────────────────────── */}
+      <div className="bg-slate-800/50 border border-slate-700/60 rounded-lg p-3 space-y-3">
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Backtest Setup</p>
 
-      {/* Year selection */}
-      <div>
-        <label className="block text-sm font-medium text-slate-300 mb-2">Years</label>
-        <div className="flex flex-wrap gap-2">
-          {availableYears.map((year) => (
-            <button
-              key={year}
-              type="button"
-              onClick={() => toggleYear(year)}
-              className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                selectedYears.includes(year)
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-              }`}
-            >
-              {year}
-            </button>
-          ))}
+        {/* Strategy */}
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Strategy</label>
+          <select
+            value={strategy}
+            onChange={(e) => setStrategy(e.target.value)}
+            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-slate-100 text-sm focus:outline-none focus:border-blue-500"
+          >
+            {strategies.map((s) => (
+              <option key={s.name} value={s.name}>
+                {s.display_name}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {/* Symbol */}
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Symbol</label>
+          <Select
+            options={availableSymbols.map((sym) => ({ value: sym, label: sym }))}
+            value={{ value: selectedSymbol, label: selectedSymbol }}
+            onChange={(opt) => opt && setSelectedSymbol(opt.value)}
+            isSearchable
+            styles={{
+              control: (base, state) => ({
+                ...base,
+                backgroundColor: '#1e293b',
+                borderColor: state.isFocused ? '#3b82f6' : '#475569',
+                borderRadius: '0.5rem',
+                boxShadow: 'none',
+                '&:hover': { borderColor: '#64748b' },
+              }),
+              menu: (base) => ({
+                ...base,
+                backgroundColor: '#1e293b',
+                border: '1px solid #475569',
+                borderRadius: '0.5rem',
+                overflow: 'hidden',
+              }),
+              option: (base, state) => ({
+                ...base,
+                backgroundColor: state.isSelected
+                  ? '#2563eb'
+                  : state.isFocused
+                  ? '#334155'
+                  : 'transparent',
+                color: state.isSelected ? '#fff' : '#cbd5e1',
+                fontSize: '0.875rem',
+                cursor: 'pointer',
+              }),
+              singleValue: (base) => ({ ...base, color: '#f1f5f9', fontSize: '0.875rem' }),
+              input: (base) => ({ ...base, color: '#f1f5f9', fontSize: '0.875rem' }),
+              indicatorSeparator: () => ({ display: 'none' }),
+              dropdownIndicator: (base) => ({ ...base, color: '#64748b', padding: '0 6px' }),
+            }}
+          />
+        </div>
+
+        {/* Years */}
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Years</label>
+          <div className="flex flex-wrap gap-2">
+            {availableYears.map((year) => (
+              <button
+                key={year}
+                type="button"
+                onClick={() => toggleYear(year)}
+                className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                  selectedYears.includes(year)
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                }`}
+              >
+                {year}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Timeframe */}
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">Timeframe</label>
+          <div className="flex gap-2">
+            {availableTimeframes.map((tf) => (
+              <button
+                key={tf}
+                type="button"
+                onClick={() => setTimeframe(tf)}
+                className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
+                  timeframe === tf
+                    ? 'bg-blue-600 text-white'
+                    : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
+                }`}
+              >
+                {tf}
+              </button>
+            ))}
+          </div>
         </div>
       </div>
 
-      {/* Timeframe */}
-      <div>
-        <label className="block text-sm font-medium text-slate-300 mb-2">Timeframe</label>
-        <div className="flex gap-2">
-          {availableTimeframes.map((tf) => (
-            <button
-              key={tf}
-              type="button"
-              onClick={() => setTimeframe(tf)}
-              className={`px-3 py-1 rounded-md text-sm font-medium transition-colors ${
-                timeframe === tf
-                  ? 'bg-blue-600 text-white'
-                  : 'bg-slate-700 text-slate-300 hover:bg-slate-600'
-              }`}
-            >
-              {tf}
-            </button>
-          ))}
+      {/* ── Capital & Risk ─────────────────────────────────────────────── */}
+      <div className="bg-slate-800/50 border border-slate-700/60 rounded-lg p-3 space-y-3">
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Capital &amp; Risk</p>
+
+        {/* Initial Capital */}
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">
+            Initial Capital (USD)
+            <InfoTooltip text="Starting account balance for the simulation. Used to calculate lot sizes and track equity growth." />
+          </label>
+          <input
+            type="number"
+            value={capital}
+            min={100}
+            step={1}
+            onChange={(e) => setCapital(Number(e.target.value))}
+            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-slate-100 text-sm focus:outline-none focus:border-blue-500"
+          />
         </div>
-      </div>
 
-      {/* Capital */}
-      <div>
-        <label className="block text-sm font-medium text-slate-300 mb-1">
-          Initial Capital (USD)
-          <InfoTooltip text="Starting account balance for the simulation. Used to calculate lot sizes and track equity growth." />
-        </label>
-        <input
-          type="number"
-          value={capital}
-          min={100}
-          step={1}
-          onChange={(e) => setCapital(Number(e.target.value))}
-          className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-slate-100 focus:outline-none focus:border-blue-500"
-        />
-      </div>
-
-      {/* Risk % */}
-      <div>
-        <label className="block text-sm font-medium text-slate-300 mb-1">
-          Risk per Trade:{' '}
-          <span className="text-blue-400 font-bold">{riskPct}%</span>
-          <InfoTooltip text="Fraction of capital risked per trade. Lot size is calculated so that a full SL hit costs exactly this % of the account (or of initial capital if compounding is off)." />
-        </label>
-        <input
-          type="range"
-          min={0.5}
-          max={5}
-          step={0.5}
-          value={riskPct}
-          onChange={(e) => setRiskPct(Number(e.target.value))}
-          className="w-full accent-blue-500"
-        />
-        <div className="flex justify-between text-xs text-slate-500 mt-1">
-          <span>0.5%</span>
-          <span>5%</span>
+        {/* Risk % */}
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">
+            Risk per Trade:{' '}
+            <span className="text-blue-400 font-bold">{riskPct}%</span>
+            <InfoTooltip text="Fraction of capital risked per trade. Lot size is calculated so that a full SL hit costs exactly this % of the account (or of initial capital if compounding is off)." />
+          </label>
+          <input
+            type="range"
+            min={0.5}
+            max={5}
+            step={0.5}
+            value={riskPct}
+            onChange={(e) => setRiskPct(Number(e.target.value))}
+            className="w-full accent-blue-500"
+          />
+          <div className="flex justify-between text-xs text-slate-500 mt-0.5">
+            <span>0.5%</span>
+            <span>5%</span>
+          </div>
         </div>
-      </div>
 
-      {/* Risk Recovery when underwater */}
-      <div>
-        <label className="block text-sm font-medium text-slate-300 mb-1">
-          Recovery Risk %{' '}
-          <span className="text-blue-400 font-bold">{riskRecovery}%</span>
-          <InfoTooltip text="Reduced risk % applied when current capital falls below the initial capital. Set to 0 to disable." />
-        </label>
-        <input
-          type="range"
-          min={0}
-          max={5}
-          step={0.5}
-          value={riskRecovery}
-          onChange={(e) => setRiskRecovery(Number(e.target.value))}
-          className="w-full accent-blue-500"
-        />
-        <div className="flex justify-between text-xs text-slate-500 mt-1">
-          <span>Disabled (0%)</span>
-          <span>5%</span>
+        {/* Recovery Risk */}
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">
+            Recovery Risk:{' '}
+            <span className="text-blue-400 font-bold">{riskRecovery}%</span>
+            <InfoTooltip text="Reduced risk % applied when current capital falls below the initial capital. Set to 0 to disable." />
+          </label>
+          <input
+            type="range"
+            min={0}
+            max={5}
+            step={0.5}
+            value={riskRecovery}
+            onChange={(e) => setRiskRecovery(Number(e.target.value))}
+            className="w-full accent-blue-500"
+          />
+          <div className="flex justify-between text-xs text-slate-500 mt-0.5">
+            <span>Disabled (0%)</span>
+            <span>5%</span>
+          </div>
         </div>
-      </div>
 
-      {/* Commission */}
-      <div>
-        <label className="block text-sm font-medium text-slate-300 mb-1">
-          Commission per Lot (USD)
-          <InfoTooltip text="Round-trip commission charged per standard lot (entry + exit combined). Deducted from each trade's profit." />
-        </label>
-        <input
-          type="number"
-          value={commissionPerLot}
-          min={0}
-          step={0.5}
-          onChange={(e) => setCommissionPerLot(parseFloat(e.target.value) || 0)}
-          className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-slate-100 focus:outline-none focus:border-blue-500"
-        />
-      </div>
+        {/* Commission */}
+        <div>
+          <label className="block text-xs text-slate-400 mb-1">
+            Commission per Lot (USD)
+            <InfoTooltip text="Round-trip commission charged per standard lot (entry + exit combined). Deducted from each trade's profit." />
+          </label>
+          <input
+            type="number"
+            value={commissionPerLot}
+            min={0}
+            step={0.5}
+            onChange={(e) => setCommissionPerLot(parseFloat(e.target.value) || 0)}
+            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-slate-100 text-sm focus:outline-none focus:border-blue-500"
+          />
+        </div>
 
-      {/* Toggles */}
-      <div className="space-y-3">
         {/* Compounding */}
         <div className="flex items-center gap-3">
           <button
@@ -824,74 +899,21 @@ export function BacktestForm({ onResult, initialParams }: Props) {
               }`}
             />
           </button>
-          <span className="text-sm text-slate-300">
+          <span className="text-xs text-slate-400">
             Compounding{' '}
-            {compound ? (
-              <span className="text-blue-400">ON</span>
-            ) : (
-              <span className="text-slate-500">OFF</span>
-            )}
+            {compound ? <span className="text-blue-400">ON</span> : <span className="text-slate-500">OFF</span>}
           </span>
           <InfoTooltip text="ON: lot size recalculated from current balance each trade (risk compounds). OFF: lot size uses the fixed initial capital throughout." />
         </div>
+      </div>
 
-        {/* Period SL Limit */}
-        <div className="flex items-start gap-3 flex-wrap">
-          <button
-            type="button"
-            onClick={() => setSlLimitOn((v) => !v)}
-            className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 mt-0.5 ${
-              slLimitOn ? 'bg-amber-500' : 'bg-slate-600'
-            }`}
-          >
-            <span
-              className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
-                slLimitOn ? 'translate-x-5' : ''
-              }`}
-            />
-          </button>
-          <div className="flex flex-col gap-1">
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-slate-300 flex-shrink-0">
-                Period SL Limit
-              </span>
-              <InfoTooltip text="Stop taking new trades for the rest of the period (day / week / month) once this many stop-losses have been hit. Resets automatically at the start of each new period." />
-            </div>
-            {slLimitOn && (
-              <div className="flex items-center gap-2 flex-wrap">
-                <span className="text-xs text-slate-500">Max</span>
-                <input
-                  type="number"
-                  value={slLimitMax}
-                  min={1}
-                  max={20}
-                  step={1}
-                  onChange={(e) => setSlLimitMax(Math.max(1, parseInt(e.target.value) || 1))}
-                  className="w-16 bg-slate-800 border border-amber-500 rounded px-2 py-1 text-sm text-center text-amber-300"
-                />
-                <span className="text-xs text-slate-500">SLs per</span>
-                {(['day', 'week', 'month'] as const).map((p) => (
-                  <button
-                    key={p}
-                    type="button"
-                    onClick={() => setSlLimitPeriod(p)}
-                    className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
-                      slLimitPeriod === p
-                        ? 'bg-amber-500 text-white'
-                        : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
-                    }`}
-                  >
-                    {p}
-                  </button>
-                ))}
-              </div>
-            )}
-          </div>
-        </div>
+      {/* ── Trade Management ───────────────────────────────────────────── */}
+      <div className="bg-slate-800/50 border border-slate-700/60 rounded-lg p-3 space-y-3">
+        <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider">Trade Management</p>
 
         {/* Max Positions */}
         <div className="flex items-center gap-3">
-          <span className="text-sm text-slate-300">
+          <span className="text-xs text-slate-400">
             Max Positions
             <InfoTooltip text="Maximum number of trades that can be open simultaneously. When set to 1 (default) the engine behaves as before — one trade at a time. Higher values allow concurrent positions from different signals." />
           </span>
@@ -906,7 +928,7 @@ export function BacktestForm({ onResult, initialParams }: Props) {
           />
         </div>
 
-        {/* Breakeven */}
+        {/* Move SL (Breakeven) */}
         <div className="flex items-start gap-3 flex-wrap">
           <button
             type="button"
@@ -923,7 +945,7 @@ export function BacktestForm({ onResult, initialParams }: Props) {
           </button>
           <div className="flex flex-col gap-1.5">
             <div className="flex items-center gap-2">
-              <span className="text-sm text-slate-300 flex-shrink-0">Move SL after trigger</span>
+              <span className="text-xs text-slate-400 flex-shrink-0">Move SL after trigger</span>
               <InfoTooltip text="Once price reaches the trigger R, the stop-loss is moved to the locked R level. E.g. trigger=1R, lock=0.5R locks in 0.5R profit. Lock=0 is classic break-even. Lock can be negative to cut losses early." />
             </div>
             {breakevenOn && (
@@ -958,6 +980,58 @@ export function BacktestForm({ onResult, initialParams }: Props) {
                   <p className="text-xs text-red-400">Lock ({breakevenSlR}R) must be &lt; Trigger ({breakevenR}R)</p>
                 )}
               </>
+            )}
+          </div>
+        </div>
+
+        {/* Period SL Limit */}
+        <div className="flex items-start gap-3 flex-wrap">
+          <button
+            type="button"
+            onClick={() => setSlLimitOn((v) => !v)}
+            className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 mt-0.5 ${
+              slLimitOn ? 'bg-amber-500' : 'bg-slate-600'
+            }`}
+          >
+            <span
+              className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                slLimitOn ? 'translate-x-5' : ''
+              }`}
+            />
+          </button>
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-slate-400 flex-shrink-0">Period SL Limit</span>
+              <InfoTooltip text="Stop taking new trades for the rest of the period (day / week / month) once this many stop-losses have been hit. Resets automatically at the start of each new period." />
+            </div>
+            {slLimitOn && (
+              <div className="flex items-center gap-2 flex-wrap">
+                <span className="text-xs text-slate-500">Max</span>
+                <input
+                  type="number"
+                  value={slLimitMax}
+                  min={1}
+                  max={20}
+                  step={1}
+                  onChange={(e) => setSlLimitMax(Math.max(1, parseInt(e.target.value) || 1))}
+                  className="w-16 bg-slate-800 border border-amber-500 rounded px-2 py-1 text-sm text-center text-amber-300"
+                />
+                <span className="text-xs text-slate-500">SLs per</span>
+                {(['day', 'week', 'month'] as const).map((p) => (
+                  <button
+                    key={p}
+                    type="button"
+                    onClick={() => setSlLimitPeriod(p)}
+                    className={`px-2 py-0.5 rounded text-xs font-medium transition-colors ${
+                      slLimitPeriod === p
+                        ? 'bg-amber-500 text-white'
+                        : 'bg-slate-700 text-slate-400 hover:bg-slate-600'
+                    }`}
+                  >
+                    {p}
+                  </button>
+                ))}
+              </div>
             )}
           </div>
         </div>
