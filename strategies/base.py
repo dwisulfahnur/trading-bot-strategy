@@ -230,10 +230,11 @@ class BaseStrategy(ABC):
         teeth_alpha = 1.0 / self.alligator_teeth
         lips_alpha  = 1.0 / self.alligator_lips
 
+        # Offsets match the TradingView display: jaw +8, teeth +5, lips +3
         df = df.with_columns([
-            pl.col("close").ewm_mean(alpha=jaw_alpha,   adjust=False).alias("_jaw"),
-            pl.col("close").ewm_mean(alpha=teeth_alpha, adjust=False).alias("_teeth"),
-            pl.col("close").ewm_mean(alpha=lips_alpha,  adjust=False).alias("_lips"),
+            pl.col("close").ewm_mean(alpha=jaw_alpha,   adjust=False).shift(8).alias("_jaw"),
+            pl.col("close").ewm_mean(alpha=teeth_alpha, adjust=False).shift(5).alias("_teeth"),
+            pl.col("close").ewm_mean(alpha=lips_alpha,  adjust=False).shift(3).alias("_lips"),
         ])
 
         df = df.with_columns([
