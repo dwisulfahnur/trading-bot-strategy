@@ -43,6 +43,9 @@ export interface BacktestRequest {
   symbol: string;
   initial_capital: number;
   risk_pct: number;
+  risk_recovery: number;
+  trail_recovery: boolean;
+  trail_recovery_pct: number;
   compound: boolean;
   breakeven_r: number | null;
   breakeven_sl_r: number;

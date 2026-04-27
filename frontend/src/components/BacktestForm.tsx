@@ -287,7 +287,29 @@ const PARAM_META: Record<string, ParamInfo> = {
   sl_mode: {
     label: 'Stop-Loss Placement',
     description:
-      'Where to place the stop-loss relative to the Order Block. "OB Edge" sets SL just beyond the far edge of the OB candle (full OB height as risk). "OB Midpoint" places SL at the 50% level of the OB for a tighter stop. "Structure" places SL beyond the swing low/high that defined the BOS, giving price more room but widening risk.',
+      'Where to place the stop-loss. "Swing Point" uses the anchor swing low (long) or swing high (short) — the structural level that invalidates the trade. "Signal Candle" uses the low/high of the bar where the signal fired for a tighter stop. For Order Block mode: "OB Edge" = full OB height as risk, "OB Midpoint" = 50% of OB, "Structure" = beyond the BOS swing.',
+  },
+
+  // Market Structure + Fibonacci
+  swing_n: {
+    label: 'Swing N (each side)',
+    description:
+      'Number of candles required on each side of a swing high or low to confirm it. e.g. N=5 means the center bar must have a higher high (or lower low) than the 5 bars on each side. Higher N = fewer but more significant swing points.',
+  },
+  swing_n_before: {
+    label: 'Swing N Before',
+    description:
+      'Number of candles to the LEFT of the swing point that must be lower (swing high) or higher (swing low). Controls how established the move leading into the swing must be. Higher = fewer but more significant swings.',
+  },
+  swing_n_after: {
+    label: 'Swing N After',
+    description:
+      'Number of candles to the RIGHT of the swing point that must be lower (swing high) or higher (swing low). Controls how many bars are needed to confirm the swing — also sets how delayed the confirmation is. Higher = stronger confirmation but later signal.',
+  },
+  fib_entry: {
+    label: 'Fibonacci Entry Level',
+    description:
+      'Retracement level of the impulse leg where the limit order is placed. 0.382 = 38.2% retracement (shallow), 0.5 = 50%, 0.618 = 61.8% (golden ratio), 0.786 = 78.6% (deep). Price must pull back to this level after the swing is confirmed to trigger entry.',
   },
 };
 
@@ -385,7 +407,7 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
   n_structure: [
     {
       title: 'Signal Generation',
-      params: ['ema_period', 'ema_timeframe', 'swing_n', 'rr_ratio', 'sl_mode'],
+      params: ['ema_period', 'ema_timeframe', 'swing_n_before', 'swing_n_after', 'rr_ratio', 'sl_mode'],
     },
     {
       title: 'Pending Order',
@@ -448,6 +470,35 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
     {
       title: 'Entry & Exit',
       params: ['retracement_pct', 'sl_mult', 'tp_mult', 'max_pending_bars'],
+    },
+    {
+      title: 'Session Filter',
+      params: ['sessions'],
+    },
+    {
+      title: 'Sideways Filter',
+      params: [
+        'sideways_filter',
+        'adx_period', 'adx_threshold',
+        'ema_slope_period', 'ema_slope_min',
+        'choppiness_period', 'choppiness_max',
+        'alligator_jaw', 'alligator_teeth', 'alligator_lips',
+        'stochrsi_rsi_period', 'stochrsi_stoch_period', 'stochrsi_oversold', 'stochrsi_overbought',
+      ],
+    },
+  ],
+  market_structure_fib: [
+    {
+      title: 'Signal Generation',
+      params: ['swing_n', 'fib_entry', 'sl_mode', 'rr_ratio'],
+    },
+    {
+      title: 'Trend Filter (EMA)',
+      params: ['ema_period', 'ema_timeframe'],
+    },
+    {
+      title: 'Pending Order',
+      params: ['pending_cancel', 'max_pending_bars'],
     },
     {
       title: 'Session Filter',
@@ -562,6 +613,8 @@ export function BacktestForm({ onResult, initialParams }: Props) {
   const [capital, setCapital] = useState(10000);
   const [riskPct, setRiskPct] = useState(2);
   const [riskRecovery, setRiskRecovery] = useState(0);
+  const [trailRecovery, setTrailRecovery] = useState(false);
+  const [trailRecoveryPct, setTrailRecoveryPct] = useState(10);
   const [compound, setCompound] = useState(false);
   const [breakevenOn, setBreakevenOn] = useState(false);
   const [breakevenR, setBreakevenR] = useState(1.0);
@@ -593,6 +646,11 @@ export function BacktestForm({ onResult, initialParams }: Props) {
     if (initialParams.risk_pct != null) {
       setRiskPct(Math.round((initialParams.risk_pct as number) * 1000) / 10);
     }
+    if (initialParams.risk_recovery != null) {
+      setRiskRecovery(Math.round((initialParams.risk_recovery as number) * 1000) / 10);
+    }
+    if (initialParams.trail_recovery != null) setTrailRecovery(initialParams.trail_recovery as boolean);
+    if (initialParams.trail_recovery_pct != null) setTrailRecoveryPct(initialParams.trail_recovery_pct as number);
     if (initialParams.compound != null) setCompound(initialParams.compound as boolean);
     setBreakevenOn(initialParams.breakeven_r != null);
     if (initialParams.breakeven_r != null) setBreakevenR(initialParams.breakeven_r as number);
@@ -672,6 +730,8 @@ export function BacktestForm({ onResult, initialParams }: Props) {
         initial_capital: capital,
         risk_pct: riskPct / 100,
         risk_recovery: riskRecovery / 100,
+        trail_recovery: riskRecovery > 0 ? trailRecovery : false,
+        trail_recovery_pct: trailRecoveryPct,
         compound,
         breakeven_r:    breakevenOn ? breakevenR : null,
         breakeven_sl_r: breakevenOn ? breakevenSlR : 0.0,
@@ -867,6 +927,50 @@ export function BacktestForm({ onResult, initialParams }: Props) {
             <span>5%</span>
           </div>
         </div>
+
+        {/* Trail Recovery Baseline */}
+        {riskRecovery > 0 && (
+          <>
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setTrailRecovery((t) => !t)}
+                className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${
+                  trailRecovery ? 'bg-amber-600' : 'bg-slate-600'
+                }`}
+              >
+                <span
+                  className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                    trailRecovery ? 'translate-x-5' : ''
+                  }`}
+                />
+              </button>
+              <span className="text-xs text-slate-400">
+                Trail Recovery{' '}
+                {trailRecovery ? <span className="text-amber-400">ON</span> : <span className="text-slate-500">OFF</span>}
+              </span>
+              <InfoTooltip text="When ON, the recovery baseline trails up with each profit milestone. Recovery risk activates when balance drops below the last locked milestone, not just the initial capital." />
+            </div>
+            {trailRecovery && (
+              <div>
+                <label className="block text-xs text-slate-400 mb-1">
+                  Trail every{' '}
+                  <span className="text-amber-400 font-bold">{trailRecoveryPct}%</span>
+                  <InfoTooltip text="Baseline locks in at compounding milestones (e.g. 10% → ×1.1, ×1.21, ×1.331…). If balance drops below the last locked milestone, recovery risk activates." />
+                </label>
+                <input
+                  type="number"
+                  value={trailRecoveryPct}
+                  min={1}
+                  max={100}
+                  step={1}
+                  onChange={(e) => setTrailRecoveryPct(Number(e.target.value) || 10)}
+                  className="w-full bg-slate-800 border border-amber-600/50 rounded-lg px-3 py-2 text-slate-100 text-sm focus:outline-none focus:border-amber-500"
+                />
+              </div>
+            )}
+          </>
+        )}
 
         {/* Commission */}
         <div>
