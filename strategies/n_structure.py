@@ -34,7 +34,8 @@ class NStructureStrategy(BaseStrategy):
         ema_period: int = 200,
         ema_timeframe: str = "same",
         symbol: str = "XAUUSD",
-        swing_n: int = 5,
+        swing_n_before: int = 5,
+        swing_n_after: int = 5,
         rr_ratio: float = 2.0,
         sl_mode: str = "swing_midpoint",
         # Pending order cancellation
@@ -61,7 +62,8 @@ class NStructureStrategy(BaseStrategy):
         self.ema_period = ema_period
         self.ema_timeframe = ema_timeframe
         self.symbol = symbol
-        self.swing_n = swing_n
+        self.swing_n_before = swing_n_before
+        self.swing_n_after = swing_n_after
         self.rr_ratio = rr_ratio
         self.sl_mode = sl_mode
         self.pending_cancel = pending_cancel
@@ -87,8 +89,6 @@ class NStructureStrategy(BaseStrategy):
     # ------------------------------------------------------------------
 
     def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
-        n = self.swing_n
-
         if self.ema_timeframe == "same":
             df = df.with_columns(
                 pl.col("close").ewm_mean(span=self.ema_period, adjust=False).alias("ema")
@@ -97,8 +97,8 @@ class NStructureStrategy(BaseStrategy):
             df = self._load_htf_ema(df)
 
         df = df.with_columns([
-            self._swing_high_price(n).alias("_sh"),
-            self._swing_low_price(n).alias("_sl"),
+            self._swing_high_price(self.swing_n_before, self.swing_n_after).alias("_sh"),
+            self._swing_low_price(self.swing_n_before, self.swing_n_after).alias("_sl"),
         ])
 
         df = self._add_sideways_filter(df)
@@ -144,24 +144,28 @@ class NStructureStrategy(BaseStrategy):
         return df.sort("time").join_asof(htf, on="time", strategy="backward")
 
     @staticmethod
-    def _swing_high_price(n: int) -> pl.Expr:
-        """Confirmed swing high: high[i] > n bars each side. Result shifted n bars to avoid lookahead."""
+    def _swing_high_price(n_before: int, n_after: int) -> pl.Expr:
+        """Confirmed swing high: high[i] > n_before bars to the left and n_after bars to the right.
+        Result is shifted n_after bars to avoid lookahead."""
         mask = pl.lit(True)
-        for j in range(1, n + 1):
+        for j in range(1, n_before + 1):
             mask = mask & (pl.col("high") > pl.col("high").shift(j))
+        for j in range(1, n_after + 1):
             mask = mask & (pl.col("high") > pl.col("high").shift(-j))
-        confirmed = mask.shift(n)
-        return pl.when(confirmed).then(pl.col("high").shift(n)).otherwise(None)
+        confirmed = mask.shift(n_after)
+        return pl.when(confirmed).then(pl.col("high").shift(n_after)).otherwise(None)
 
     @staticmethod
-    def _swing_low_price(n: int) -> pl.Expr:
-        """Confirmed swing low: low[i] < n bars each side. Result shifted n bars to avoid lookahead."""
+    def _swing_low_price(n_before: int, n_after: int) -> pl.Expr:
+        """Confirmed swing low: low[i] < n_before bars to the left and n_after bars to the right.
+        Result is shifted n_after bars to avoid lookahead."""
         mask = pl.lit(True)
-        for j in range(1, n + 1):
+        for j in range(1, n_before + 1):
             mask = mask & (pl.col("low") < pl.col("low").shift(j))
+        for j in range(1, n_after + 1):
             mask = mask & (pl.col("low") < pl.col("low").shift(-j))
-        confirmed = mask.shift(n)
-        return pl.when(confirmed).then(pl.col("low").shift(n)).otherwise(None)
+        confirmed = mask.shift(n_after)
+        return pl.when(confirmed).then(pl.col("low").shift(n_after)).otherwise(None)
 
     def _scan_n_structure(self, df: pl.DataFrame) -> tuple[list, list, list, list, list]:
         """

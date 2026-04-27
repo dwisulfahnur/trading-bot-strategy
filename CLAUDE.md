@@ -179,7 +179,8 @@ Only the active sideways filter's sub-params are included in the filename to avo
 |------------------------|---------|---------------------------------------------------------|
 | `ema_period`           | 200     | EMA period for trend filter                             |
 | `ema_timeframe`        | "same"  | EMA timeframe: "same" or M1/M5/M15/H1/H4/D1             |
-| `swing_n`              | 5       | Swing detection lookback                                 |
+| `swing_n_before`       | 5       | Bars to the left required to confirm a swing point       |
+| `swing_n_after`        | 5       | Bars to the right required to confirm a swing point      |
 | `rr_ratio`             | 2.0     | Take-profit = `rr_ratio × stop-loss distance`           |
 | `sl_mode`              | swing_midpoint | SL mode: swing_midpoint/swing_point/signal_candle |
 | `pending_cancel`       | max_bars | Pending order cancellation: none/max_bars/hl_break/both |
