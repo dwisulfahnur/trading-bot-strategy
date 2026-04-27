@@ -41,6 +41,8 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
         initial_capital = request_data["initial_capital"]
         risk_pct = request_data["risk_pct"]
         risk_recovery = request_data.get("risk_recovery", 0.0)
+        trail_recovery = request_data.get("trail_recovery", False)
+        trail_recovery_pct = request_data.get("trail_recovery_pct", 10.0)
         compound = request_data["compound"]
         breakeven_r    = request_data.get("breakeven_r", None)
         breakeven_sl_r = request_data.get("breakeven_sl_r", 0.0)
@@ -77,6 +79,12 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
                 int(params.get("max_pending_bars", 10))
                 if pending_cancel in ("max_bars", "both") else None
             )
+        elif strategy_name == "market_structure_fib":
+            pending_cancel = params.get("pending_cancel", "both")
+            max_pending_bars = (
+                int(params.get("max_pending_bars", 20))
+                if pending_cancel in ("max_bars", "both") else None
+            )
         else:
             max_pending_bars = None
         trades = simulate(
@@ -90,7 +98,7 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
             max_positions=max_positions,
         )
 
-        metrics = compute_metrics(trades, initial_capital, risk_pct, risk_recovery=risk_recovery, compound=compound, commission_per_lot=commission_per_lot, symbol=symbol)
+        metrics = compute_metrics(trades, initial_capital, risk_pct, risk_recovery=risk_recovery, compound=compound, commission_per_lot=commission_per_lot, symbol=symbol, trail_recovery=trail_recovery, trail_recovery_pct=trail_recovery_pct)
         metrics["compound"]       = compound
         metrics["breakeven_r"]    = breakeven_r
         metrics["breakeven_sl_r"] = breakeven_sl_r
@@ -104,6 +112,8 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
             "sl_period": sl_period,
             "max_positions": max_positions,
             "risk_recovery": risk_recovery,
+            "trail_recovery": trail_recovery,
+            "trail_recovery_pct": trail_recovery_pct,
         }
         out_path = save_result(metrics, strategy_name, params_with_sim, timeframe, years, symbol=symbol)
         result_id = out_path.stem
