@@ -17,6 +17,8 @@ class BacktestRequest(BaseModel):
     initial_capital: float = Field(default=10_000, gt=0)
     risk_pct: float = Field(default=0.02, gt=0, le=1)
     risk_recovery: float = Field(default=0.0, ge=0, le=1)
+    trail_recovery: bool = False
+    trail_recovery_pct: float = Field(default=10.0, ge=1.0, le=100.0)
     compound: bool = False
     breakeven_r: float | None = None
     breakeven_sl_r: float = 0.0
@@ -32,6 +34,10 @@ class BacktestRequest(BaseModel):
             raise ValueError(
                 f"risk_recovery ({self.risk_recovery}) must be less than risk_pct ({self.risk_pct}) "
                 "— recovery risk is meant to reduce exposure when underwater, not increase it."
+            )
+        if self.trail_recovery and self.risk_recovery == 0:
+            raise ValueError(
+                "trail_recovery requires risk_recovery > 0 — enable recovery risk first."
             )
         return self
 
