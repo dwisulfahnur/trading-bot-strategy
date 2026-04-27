@@ -148,33 +148,67 @@ def _risk_block(params: dict, lang: str) -> str:
     max_sl          = params.get("max_sl_per_period")
     sl_period       = params.get("sl_period", "none")
     risk_recovery   = float(params.get("risk_recovery", 0.0)) * 100
-
-    recovery_label = (
-        f"Reduced to {risk_recovery:.1f}% of balance when underwater"
-        if risk_recovery > 0
-        else "Not configured — use general risk when underwater"
-    )
+    trail_recovery  = bool(params.get("trail_recovery", False))
+    trail_recovery_pct = float(params.get("trail_recovery_pct", 10.0))
 
     initial_capital      = float(params.get("initial_capital", 10000))
     commission_per_lot_v = float(params.get("commission_per_lot", 3.5))
 
     if risk_recovery > 0:
+        if trail_recovery:
+            recovery_label = (
+                f"Trailing baseline — recovery risk {risk_recovery:.1f}% activates when balance drops below "
+                f"last locked milestone (initial {initial_capital:.0f}, steps every {trail_recovery_pct:.0f}%)"
+            )
+        else:
+            recovery_label = f"Reduced to {risk_recovery:.1f}% of balance when underwater (balance < InpInitialCapital)"
+    else:
+        recovery_label = "Not configured — use general risk at all times"
+
+    if risk_recovery > 0:
+        baseline_var = "g_recovery_baseline"
         if compound:
             lot_formula = (
                 f"`active_risk_amount / (sl_distance × {contract_size:,})`  "
                 f"where `active_risk_amount = AccountInfoDouble(ACCOUNT_BALANCE) × {risk_pct_pct:.1f}% / 100` "
-                f"when balance ≥ g_initial_capital, else `AccountInfoDouble(ACCOUNT_BALANCE) × {risk_recovery:.1f}% / 100`"
+                f"when balance ≥ {baseline_var}, else `AccountInfoDouble(ACCOUNT_BALANCE) × {risk_recovery:.1f}% / 100`"
             )
         else:
             lot_formula = (
                 f"`active_risk_amount / (sl_distance × {contract_size:,})`  "
                 f"where `active_risk_amount = InpInitialCapital × {risk_pct_pct:.1f}% / 100` (default {initial_capital:.0f}) "
-                f"when balance ≥ g_initial_capital, else `InpInitialCapital × {risk_recovery:.1f}% / 100` (fixed, no compounding)"
+                f"when balance ≥ {baseline_var}, else `InpInitialCapital × {risk_recovery:.1f}% / 100` (fixed, no compounding)"
             )
-        recovery_impl = (
-            f"  - In `OnInit`: store `g_initial_capital = AccountInfoDouble(ACCOUNT_BALANCE)` — do NOT read balance inside OnTick for this.\n"
-            f"  - Before every lot calculation: compare `AccountInfoDouble(ACCOUNT_BALANCE)` against `g_initial_capital` to pick the active risk percentage.\n"
-        )
+
+        if trail_recovery:
+            recovery_impl = (
+                f"  - Declare a global `double g_recovery_baseline`.\n"
+                f"  - In `OnInit`: set `g_recovery_baseline = InpInitialCapital` (always use the fixed input, NOT AccountBalance — this survives EA restarts correctly).\n"
+                f"    Then fast-forward the baseline to reflect gains already made:\n"
+                f"    ```\n"
+                f"    double next = g_recovery_baseline * (1.0 + InpTrailRecoveryPct / 100.0);\n"
+                f"    while(AccountInfoDouble(ACCOUNT_BALANCE) >= next) {{\n"
+                f"        g_recovery_baseline = next;\n"
+                f"        next = g_recovery_baseline * (1.0 + InpTrailRecoveryPct / 100.0);\n"
+                f"    }}\n"
+                f"    ```\n"
+                f"  - In `ComputeLots` (before the underwater check): update the baseline each call so it trails in real time:\n"
+                f"    ```\n"
+                f"    double next = g_recovery_baseline * (1.0 + InpTrailRecoveryPct / 100.0);\n"
+                f"    while(balance >= next) {{\n"
+                f"        g_recovery_baseline = next;\n"
+                f"        next = g_recovery_baseline * (1.0 + InpTrailRecoveryPct / 100.0);\n"
+                f"    }}\n"
+                f"    ```\n"
+                f"  - `InpTrailRecoveryPct` is an `input double` (default {trail_recovery_pct:.0f}) — the % profit step between milestones.\n"
+                f"  - Compare balance against `g_recovery_baseline` (not `InpInitialCapital`) to decide which risk % to use.\n"
+            )
+        else:
+            recovery_impl = (
+                f"  - Declare a global `double g_recovery_baseline`.\n"
+                f"  - In `OnInit`: set `g_recovery_baseline = InpInitialCapital` (always use the fixed input, NOT AccountBalance — this survives EA restarts correctly).\n"
+                f"  - Before every lot calculation: compare `AccountInfoDouble(ACCOUNT_BALANCE)` against `g_recovery_baseline` to pick the active risk percentage.\n"
+            )
     else:
         if compound:
             lot_formula = (
@@ -197,8 +231,14 @@ def _risk_block(params: dict, lang: str) -> str:
         f"    double balance = AccountInfoDouble(ACCOUNT_BALANCE);  // use Balance, not Equity\n"
     )
     if risk_recovery > 0:
+        if trail_recovery:
+            compute_lots_spec += (
+                f"    // Trail recovery baseline up to current balance\n"
+                f"    double next = g_recovery_baseline * (1.0 + InpTrailRecoveryPct / 100.0);\n"
+                f"    while(balance >= next) {{ g_recovery_baseline = next; next = g_recovery_baseline * (1.0 + InpTrailRecoveryPct / 100.0); }}\n"
+            )
         compute_lots_spec += (
-            f"    bool underwater = (balance < g_initial_capital);\n"
+            f"    bool underwater = (balance < g_recovery_baseline);\n"
         )
         if compound:
             compute_lots_spec += (
@@ -229,7 +269,7 @@ def _risk_block(params: dict, lang: str) -> str:
         f"```\n"
         f"- Use `ACCOUNT_BALANCE` (not `ACCOUNT_EQUITY`) — this matches the backtest which only updates capital after a trade closes, not on open unrealized P&L.\n"
         f"- `InpRiskPct` and `InpRiskRecovery` are fraction inputs (e.g. 0.02 for 2%), not percentages.\n"
-        f"- For non-compound mode, expose `InpInitialCapital` as an `input double` (default {initial_capital:.0f}).\n"
+        f"- Always expose `InpInitialCapital` as an `input double` (default {initial_capital:.0f}) — required for recovery baseline and non-compound lot sizing.\n"
     )
 
     commission_note = (
@@ -390,6 +430,24 @@ def _sideways_filter_desc(params: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Shared helpers for prompt builders
+# ---------------------------------------------------------------------------
+
+def _risk_input_group_line(params: dict) -> str:
+    """Builds the === Risk Management === input group line dynamically."""
+    risk_recovery = float(params.get("risk_recovery", 0.0))
+    trail_recovery = bool(params.get("trail_recovery", False))
+
+    inputs = ["initial_capital", "risk_pct", "compound"]
+    if risk_recovery > 0:
+        inputs.append("risk_recovery")
+        if trail_recovery:
+            inputs.extend(["trail_recovery", "trail_recovery_pct"])
+    inputs.extend(["max_positions", "breakeven_r", "max_sl_per_period", "sl_period"])
+    return f'- `"=== Risk Management ==="` — {", ".join(inputs)}'
+
+
+# ---------------------------------------------------------------------------
 # William Fractal Breakout prompt
 # ---------------------------------------------------------------------------
 
@@ -408,6 +466,8 @@ def _prompt_william_fractals(
     sideways     = params.get("sideways_filter", "none")
     filter_desc  = _sideways_filter_desc(params)
     session_sec  = _session_filter_section(sessions)
+
+    risk_mgmt_line = _risk_input_group_line(params)
 
     mc_section = ""
     if mc_on:
@@ -441,7 +501,7 @@ Group all `input` variables under labelled sections using `input group "..."` (M
 - `"=== Session Filter ==="` — sessions (display label)
 - `"=== Momentum Candle Filter ==="` — momentum_candle_filter, mc_body_ratio_min, mc_volume_factor, mc_volume_lookback
 - `"=== Sideways Filter ==="` — sideways_filter and its sub-parameters
-- `"=== Risk Management ==="` — risk_pct, risk_recovery, max_positions, compound, breakeven_r, max_sl_per_period, sl_period
+{risk_mgmt_line}
 - `"=== Execution ==="` — magic_number, commission_per_lot
 
 ---
@@ -568,6 +628,7 @@ def _prompt_momentum_candle(
     session_sec      = _session_filter_section(sessions)
     sideways         = params.get("sideways_filter", "none")
     filter_desc      = _sideways_filter_desc(params)
+    risk_mgmt_line   = _risk_input_group_line(params)
 
     return f"""## Strategy: Momentum Candle Scalping
 ## Platform: MetaTrader {mt_ver} ({lang})
@@ -590,7 +651,7 @@ Group all `input` variables using `input group "..."` (MQL5) or string separator
 - `"=== Entry & Exit ==="` — retracement_pct, sl_mult, tp_mult, max_pending_bars
 - `"=== Session Filter ==="` — sessions (display label)
 - `"=== Sideways Filter ==="` — sideways_filter and sub-parameters
-- `"=== Risk Management ==="` — risk_pct, risk_recovery, max_positions, compound, breakeven_r, max_sl_per_period, sl_period
+{risk_mgmt_line}
 - `"=== Execution ==="` — magic_number, commission_per_lot
 
 ---
@@ -766,6 +827,8 @@ A Fair Value Gap must exist within the `ob_lookback` window before the BOS bar:
 Scan bars j = 2 to j = {ob_lookback + 1}. If no FVG found → skip signal.
 """
 
+    risk_mgmt_line = _risk_input_group_line(params)
+
     ote_section = ""
     if require_ote:
         ote_section = f"""
@@ -811,7 +874,7 @@ Group all `input` variables using `input group "..."` (MQL5) or string separator
 - `"=== Entry & Exit ==="` — rr_ratio
 - `"=== Confluence Filters ==="` — require_fvg, require_ote, ote_fib_low, ote_fib_high
 - `"=== Session Filter ==="` — sessions (display label)
-- `"=== Risk Management ==="` — risk_pct, risk_recovery, max_positions, compound, breakeven_r, max_sl_per_period, sl_period
+{risk_mgmt_line}
 - `"=== Execution ==="` — magic_number, commission_per_lot
 
 ---
@@ -974,7 +1037,8 @@ def _prompt_n_structure(
 ) -> str:
     ema_p            = params.get("ema_period", 200)
     ema_tf           = params.get("ema_timeframe", "same")
-    swing_n          = int(params.get("swing_n", 5))
+    swing_n_before   = int(params.get("swing_n_before", 5))
+    swing_n_after    = int(params.get("swing_n_after", 5))
     rr               = params.get("rr_ratio", 2.0)
     sl_mode          = params.get("sl_mode", "swing_midpoint")
     sessions         = params.get("sessions", "all")
@@ -1037,6 +1101,7 @@ def _prompt_n_structure(
 
     _cancel_buy_block  = _cancel_block("buy")
     _cancel_sell_block = _cancel_block("sell")
+    risk_mgmt_line     = _risk_input_group_line(params)
 
     if pending_cancel == "none":
         _cancel_step = "No cancellation — pending stop orders stay open until filled."
@@ -1206,13 +1271,13 @@ The N Structure Breakout identifies a three-point swing pattern and enters via a
 placed at the breakout level the moment the structure is armed — no waiting for a close confirmation.
 
 **Bullish N (Buy setup):**
-1. Swing High H1 forms — highest high of {swing_n} bars on each side.
+1. Swing High H1 forms — highest high with {swing_n_before} bars to the left and {swing_n_after} bars to the right.
 2. Price pulls back to a Swing Low HL *after* H1 (confirmed swing low below H1).
 3. **Structure armed:** when HL is confirmed AND `close[1] < g_last_sh` (price hasn't broken out yet)
    AND `close[1] > EMA({ema_p})` → place a **Buy Stop** pending order at `g_last_sh`.
 
 **Bearish Inverted-N (Sell setup):**
-1. Swing Low L1 forms — lowest low of {swing_n} bars on each side.
+1. Swing Low L1 forms — lowest low with {swing_n_before} bars to the left and {swing_n_after} bars to the right.
 2. Price bounces to a Swing High LH *after* L1 (confirmed swing high above L1).
 3. **Structure armed:** when LH is confirmed AND `close[1] > g_last_sl` (price hasn't broken down yet)
    AND `close[1] < EMA({ema_p})` → place a **Sell Stop** pending order at `g_last_sl`.
@@ -1228,11 +1293,11 @@ TP: `stop_price ± rr_ratio × (stop_price − SL)`.
 ## Input Groups
 
 Group all `input` variables using `input group "..."` (MQL5) or string separator inputs (MQL4):
-- `"=== Signal Generation ==="` — ema_period, ema_timeframe, swing_n, rr_ratio, sl_mode
+- `"=== Signal Generation ==="` — ema_period, ema_timeframe, swing_n_before, swing_n_after, rr_ratio, sl_mode
 - `"=== Pending Order ==="` — pending_cancel, max_pending_bars (only relevant when cancel mode uses bar expiry)
 - `"=== Session Filter ==="` — sessions (display label)
 - `"=== Sideways Filter ==="` — sideways_filter and its sub-parameters
-- `"=== Risk Management ==="` — risk_pct, risk_recovery, max_positions, compound, breakeven_r, max_sl_per_period, sl_period
+{risk_mgmt_line}
 - `"=== Execution ==="` — magic_number, commission_per_lot
 
 ---
@@ -1272,13 +1337,13 @@ Update `g_last_bar_time` and proceed.
 
 ### Step 2 — Update swing-point state
 
-Compute buffer size and candidate index as **MQL5 runtime variables** from the `swing_n` input.
-Do NOT hardcode these — they must adapt when the user changes `swing_n` in EA settings.
+Compute buffer size and candidate index as **MQL5 runtime variables** from the `swing_n_before` and `swing_n_after` inputs.
+Do NOT hardcode these — they must adapt when the user changes the inputs in EA settings.
 
 **CRITICAL — declare dynamic arrays and call ArraySetAsSeries BEFORE CopyXxx:**
 ```
-int   cand       = swing_n + 1;        // series index of the swing candidate bar
-int   total_bars = 2 * swing_n + 2;    // swing_n each side + candidate + one extra
+int   cand       = swing_n_after + 1;                        // series index of the swing candidate bar
+int   total_bars = swing_n_after + 1 + swing_n_before + 1;  // right side + candidate + left side + one extra
 if(Bars(_Symbol, PERIOD_CURRENT) < total_bars + 5) return;
 
 double high[], low[], close[];
@@ -1290,16 +1355,18 @@ if(CopyLow  (_Symbol, PERIOD_CURRENT, 0, total_bars, low)   < total_bars) return
 if(CopyClose(_Symbol, PERIOD_CURRENT, 0, total_bars, close) < total_bars) return;
 ```
 
-In series order: index 0=current bar, index 1=last closed bar, index cand=candidate ({swing_n + 1} bars back).
-Right side (more recent) = indices 1..cand-1; left side (older) = indices cand+1..2*swing_n+1. No lookahead.
+In series order: index 0=current bar, index 1=last closed bar, index cand=candidate ({swing_n_after + 1} bars back).
+Right side (more recent) = indices 1..cand-1 ({swing_n_after} bars); left side (older) = indices cand+1..cand+{swing_n_before}. No lookahead.
 
 Track two flags this bar: `bool sh_just_fired = false` and `bool sl_just_fired = false`.
 
 **Check for Swing High (H1 candidate):**
 ```
 bool is_sh = true;
-for(int k = 1; k <= swing_n; k++) {{
+for(int k = 1; k <= swing_n_after; k++) {{
     if(high[cand] <= high[cand - k]) {{ is_sh = false; break; }}  // right side (more recent)
+}}
+for(int k = 1; k <= swing_n_before; k++) {{
     if(high[cand] <= high[cand + k]) {{ is_sh = false; break; }}  // left side  (older)
 }}
 if(is_sh) {{
@@ -1321,8 +1388,10 @@ if(is_sh) {{
 **Check for Swing Low (L1 candidate):**
 ```
 bool is_sl = true;
-for(int k = 1; k <= swing_n; k++) {{
+for(int k = 1; k <= swing_n_after; k++) {{
     if(low[cand] >= low[cand - k]) {{ is_sl = false; break; }}   // right side
+}}
+for(int k = 1; k <= swing_n_before; k++) {{
     if(low[cand] >= low[cand + k]) {{ is_sl = false; break; }}   // left side
 }}
 if(is_sl) {{
@@ -1466,21 +1535,18 @@ def _strip_fences(code: str) -> str:
     return "\n".join(lines).strip()
 
 
-def _format_mql_value(value) -> str:
-    if isinstance(value, bool):
-        return "true" if value else "false"
-    if isinstance(value, int):
-        return str(value)
-    if isinstance(value, float):
-        return f"{value:g}"
-    return f'"{value}"'
+def _to_inp_name(snake: str) -> str:
+    """Convert snake_case param name to InpCamelCase MQL variable name."""
+    return "Inp" + "".join(w.capitalize() for w in snake.split("_"))
 
 
 def _patch_ea_code(code: str, params: dict, results: dict) -> str:
     for name, value in params.items():
         mql_val = _format_mql_value(value)
-        pattern = rf'(\binput\s+\w+\s+{re.escape(name)}\s*=\s*)([^;]+)(;)'
-        code = re.sub(pattern, rf'\g<1>{mql_val}\3', code)
+        # Try both snake_case and InpCamelCase variable names
+        for var_name in (name, _to_inp_name(name)):
+            pattern = rf'(\binput\s+\w+\s+{re.escape(var_name)}\s*=\s*)([^;]+)(;)'
+            code = re.sub(pattern, rf'\g<1>{mql_val}\3', code)
 
     stat_subs = [
         (r'(Total trades\s*:\s*)[\d]+',         rf'\g<1>{results.get("total_trades", 0)}'),
@@ -1493,6 +1559,16 @@ def _patch_ea_code(code: str, params: dict, results: dict) -> str:
         code = re.sub(pattern, repl, code)
 
     return code
+
+
+def _format_mql_value(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return f"{value:g}"
+    return f'"{value}"'
 
 
 def _build_filename(strategy: str, params: dict, platform: str) -> str:
@@ -1525,7 +1601,12 @@ def generate_ea(req: EARequest) -> EAResponse:
 
     prompt = _build_prompt(strategy, params, results, platform)
 
-    cache_path = RESULT_DIR / f"{strategy}_{platform}.ea.json"
+    risk_recovery  = float(params.get("risk_recovery", 0.0))
+    trail_recovery = bool(params.get("trail_recovery", False))
+    compound       = bool(params.get("compound", False))
+    risk_mode = "trail" if (risk_recovery > 0 and trail_recovery) else ("rec" if risk_recovery > 0 else "base")
+    compound_mode = "compound" if compound else "fixed"
+    cache_path = RESULT_DIR / f"{strategy}_{platform}_{risk_mode}_{compound_mode}.ea.json"
     if cache_path.exists():
         with open(cache_path) as f:
             cached = json.load(f)
