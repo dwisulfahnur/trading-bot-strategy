@@ -386,19 +386,30 @@ def simulate(
                         cancelled_this_bar = True
 
             elif limit_price is not None:
+                cancel_level = pending.get("cancel_level")
+
                 if has_ticks:
                     # Tick-based fill / cancel — resolve ordering precisely
                     if pending["signal"] == 1:
                         # BUY limit: MT5 fills when Ask ≤ limit_price
-                        fill_idxs   = np.where(bar_asks <= limit_price)[0]
-                        cancel_idxs = np.where(bar_bids >  pending["tp"])[0]
+                        fill_idxs = np.where(bar_asks <= limit_price)[0]
+                        # Cancel: TP overshoot (price shoots up past TP without filling)
+                        c_tp = np.where(bar_bids > pending["tp"])[0]
+                        # Cancel: structure break (price drops below cancel_level / HL)
+                        c_brk = (np.where(bar_bids < cancel_level)[0]
+                                 if cancel_level is not None else np.empty(0, dtype=np.intp))
                     else:
                         # SELL limit: MT5 fills when Bid ≥ limit_price
-                        fill_idxs   = np.where(bar_bids >= limit_price)[0]
-                        cancel_idxs = np.where(bar_bids <  pending["tp"])[0]
+                        fill_idxs = np.where(bar_bids >= limit_price)[0]
+                        # Cancel: TP undershoot (price drops past TP without filling)
+                        c_tp = np.where(bar_bids < pending["tp"])[0]
+                        # Cancel: structure break (price rises above cancel_level / LH)
+                        c_brk = (np.where(bar_asks > cancel_level)[0]
+                                 if cancel_level is not None else np.empty(0, dtype=np.intp))
 
-                    first_fill   = int(fill_idxs[0])   if len(fill_idxs)   else None
-                    first_cancel = int(cancel_idxs[0]) if len(cancel_idxs) else None
+                    all_cancels  = np.concatenate([c_tp, c_brk])
+                    first_fill   = int(fill_idxs[0])    if len(fill_idxs)   else None
+                    first_cancel = int(all_cancels.min()) if len(all_cancels) else None
 
                     if first_fill is not None and first_cancel is not None:
                         touched   = first_fill <= first_cancel
@@ -411,10 +422,12 @@ def simulate(
                     spread = bar.get("avg_spread") or 0.0
                     if pending["signal"] == 1:
                         touched   = bar["low"]  <= limit_price - spread
-                        cancelled = bar["high"] >  pending["tp"]
+                        cancelled = (bar["high"] > pending["tp"]
+                                     or (cancel_level is not None and bar["low"] < cancel_level))
                     else:
                         touched   = bar["high"] >= limit_price
-                        cancelled = bar["low"]  <  pending["tp"]
+                        cancelled = (bar["low"]  < pending["tp"]
+                                     or (cancel_level is not None and bar["high"] > cancel_level))
 
                 if touched:
                     entry_price = limit_price
@@ -574,7 +587,7 @@ def simulate(
 # Metrics
 # ---------------------------------------------------------------------------
 
-def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float, risk_recovery: float = 0.0, compound: bool = True, commission_per_lot: float = 3.5, symbol: str = "XAUUSD") -> dict:
+def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float, risk_recovery: float = 0.0, compound: bool = True, commission_per_lot: float = 3.5, symbol: str = "XAUUSD", trail_recovery: bool = False, trail_recovery_pct: float = 10.0) -> dict:
     if not trades:
         return {}
 
@@ -588,10 +601,16 @@ def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float
     equity_curve = []
     trade_log    = []
     stopped_out  = False
+    recovery_baseline = initial_capital  # trails up with profit milestones when trail_recovery=True
 
     for i, t in enumerate(trades):
-        applied_risk = risk_pct if capital >= initial_capital else (risk_recovery if risk_recovery > 0 else risk_pct)
-        risk_at_entry  = capital * applied_risk if compound else (risk_amount_recovery if capital < initial_capital and risk_recovery > 0 else risk_amount)
+        if trail_recovery and risk_recovery > 0:
+            next_milestone = recovery_baseline * (1 + trail_recovery_pct / 100)
+            while capital >= next_milestone:
+                recovery_baseline = next_milestone
+                next_milestone = recovery_baseline * (1 + trail_recovery_pct / 100)
+        applied_risk = risk_pct if capital >= recovery_baseline else (risk_recovery if risk_recovery > 0 else risk_pct)
+        risk_at_entry  = capital * applied_risk if compound else (risk_amount_recovery if capital < recovery_baseline and risk_recovery > 0 else risk_amount)
         if symbol not in PAIR_CONFIG:
             raise ValueError(f"Symbol '{symbol}' not found in PAIR_CONFIG. Add it to backtest.py before running.")
         contract_size  = PAIR_CONFIG[symbol]["contract_size"]
@@ -695,6 +714,8 @@ def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float
         "max_drawdown_from_initial_pct": round(max_dd_from_initial, 4),
         "risk_pct":           risk_pct,
         "risk_recovery_pct":  risk_recovery,
+        "trail_recovery":     trail_recovery,
+        "trail_recovery_pct": trail_recovery_pct,
         "commission_per_lot": commission_per_lot,
         "avg_win_r":          avg_win,
         "avg_loss_r":         avg_loss,
@@ -804,10 +825,12 @@ def save_result(
             "timeframe":         timeframe,
             "years":             years,
             "symbol":            symbol,
-            "initial_capital":   metrics.get("initial_capital"),
-            "risk_pct":          metrics.get("risk_pct"),
+            "initial_capital":    metrics.get("initial_capital"),
+            "risk_pct":           metrics.get("risk_pct"),
             "risk_recovery":      metrics.get("risk_recovery_pct", 0.0),
-            "compound":          metrics.get("compound", True),
+            "trail_recovery":     metrics.get("trail_recovery", False),
+            "trail_recovery_pct": metrics.get("trail_recovery_pct", 10.0),
+            "compound":           metrics.get("compound", True),
             "commission_per_lot": metrics.get("commission_per_lot", 3.5),
             "breakeven_r":        metrics.get("breakeven_r"),
             "breakeven_sl_r":     metrics.get("breakeven_sl_r", 0.0),
@@ -844,6 +867,10 @@ def parse_args() -> argparse.Namespace:
                    help="Fraction of capital risked per trade (0.01 = 1%%)")
     p.add_argument("--risk_recovery", type=float, default=0.005,
                    help="Reduced risk %% applied when current capital is below initial capital (0.005 = 0.5%%)")
+    p.add_argument("--trail_recovery", action="store_true",
+                   help="Trail recovery baseline upward at each profit milestone instead of anchoring to initial capital")
+    p.add_argument("--trail_recovery_pct", type=float, default=10.0,
+                   help="Profit %% milestone for trailing recovery baseline (default 10). E.g. 10 = locks in every 10%% gain.")
 
     # William Fractals strategy params
     p.add_argument("--ema_period",     type=int,   default=200,
@@ -958,11 +985,13 @@ def main() -> None:
     print(f"  {len(trades)} trades executed")
 
     compound = not args.no_compound
-    metrics = compute_metrics(trades, args.capital, args.risk, risk_recovery=args.risk_recovery, compound=compound, commission_per_lot=args.commission, symbol=symbol)
-    metrics["compound"]       = compound
-    metrics["breakeven_r"]    = breakeven_r
-    metrics["breakeven_sl_r"] = breakeven_sl_r
-    metrics["risk_recovery"]  = args.risk_recovery
+    metrics = compute_metrics(trades, args.capital, args.risk, risk_recovery=args.risk_recovery, compound=compound, commission_per_lot=args.commission, symbol=symbol, trail_recovery=args.trail_recovery, trail_recovery_pct=args.trail_recovery_pct)
+    metrics["compound"]           = compound
+    metrics["breakeven_r"]        = breakeven_r
+    metrics["breakeven_sl_r"]     = breakeven_sl_r
+    metrics["risk_recovery"]      = args.risk_recovery
+    metrics["trail_recovery"]     = args.trail_recovery
+    metrics["trail_recovery_pct"] = args.trail_recovery_pct
     print_report(metrics, strategy.name, args.timeframe, args.years)
 
     out_path = save_result(metrics, strategy.name, strategy_params, args.timeframe, args.years, symbol=symbol)
