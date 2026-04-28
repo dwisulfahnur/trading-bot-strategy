@@ -261,7 +261,7 @@ def simulate(
 
     When tick_data=(timestamps_ms, bids, asks) is supplied, the simulation uses
     real tick sequences for:
-      - Market order entries (first ask/bid of the bar instead of open + avg_spread)
+      - Market order entries (first ask/bid tick instead of open + open_spread/avg_spread)
       - Limit order fill and cancel detection (actual ask/bid vs bar high/low)
       - SL/TP and break-even resolution (exact first-hit ordering, no heuristic)
 
@@ -350,7 +350,7 @@ def simulate(
                         cancelled   = (cancel_level is not None
                                        and len(np.where(bar_asks > cancel_level)[0]) > 0)
                 else:
-                    spread = bar.get("avg_spread") or 0.0
+                    spread = bar.get("open_spread") or bar.get("avg_spread") or 0.0
                     if pending["signal"] == 1:
                         touched   = bar["high"] >= stop_price
                         cancelled = cancel_level is not None and bar["low"] < cancel_level
@@ -419,7 +419,7 @@ def simulate(
                         cancelled = first_cancel is not None
                 else:
                     # OHLCV fallback
-                    spread = bar.get("avg_spread") or 0.0
+                    spread = bar.get("open_spread") or bar.get("avg_spread") or 0.0
                     if pending["signal"] == 1:
                         touched   = bar["low"]  <= limit_price - spread
                         cancelled = (bar["high"] > pending["tp"]
@@ -462,7 +462,7 @@ def simulate(
                         float(bar_asks[0]) if pending["signal"] == 1 else float(bar_bids[0])
                     )
                 else:
-                    spread = bar.get("avg_spread") or 0.0
+                    spread = bar.get("open_spread") or bar.get("avg_spread") or 0.0
                     entry_price = bar["open"] + spread if pending["signal"] == 1 else bar["open"]
 
                 sl_dist = abs(entry_price - pending["sl"])

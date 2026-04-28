@@ -270,6 +270,7 @@ def build_ohlcv(year: int, tick_parquet: Path, tf_label: str, tf_truncate: str, 
             pl.col("price").min().alias("low"),
             pl.col("price").last().alias("close"),
             pl.len().alias("ticks"),
+            pl.col("spread").first().alias("open_spread"),
             pl.col("spread").mean().alias("avg_spread"),
         )
         .sort("time")

@@ -1506,6 +1506,222 @@ still live (use `OrderSelect` or iterate `OrdersTotal()`). If an order no longer
 
 
 # ---------------------------------------------------------------------------
+# Fair Value Gap prompt builder
+# ---------------------------------------------------------------------------
+
+def _prompt_fair_value_gap(
+    params: dict, lang: str, mt_ver: str,
+    perf: str, param_lines_str: str,
+) -> str:
+    rr           = params.get("rr_ratio", 2.0)
+    ema_p        = params.get("ema_period", 200)
+    fvg_min      = params.get("fvg_min_size", 0.0)
+    min_sl_pips  = params.get("min_sl_pips", 5.0)
+    max_bars     = int(params.get("max_fvg_bars", 20))
+    entry_mode   = params.get("entry_mode", "zone_mid")
+    sl_mode      = params.get("sl_mode", "fvg_edge")
+    sessions     = params.get("sessions", "all")
+    sideways     = params.get("sideways_filter", "none")
+    filter_desc  = _sideways_filter_desc(params)
+    session_sec  = _session_filter_section(sessions)
+    risk_mgmt_line = _risk_input_group_line(params)
+
+    # MQL bar indexing (used throughout): bar[0]=forming, bar[1]=last closed (signal bar),
+    # bar[2]=impulse candle, bar[3]=first candle of the 3-bar FVG pattern.
+
+    if entry_mode == "zone_top":
+        entry_desc = "zone_high (upper boundary of the FVG gap) — same reference for both long and short"
+    elif entry_mode == "zone_bottom":
+        entry_desc = "zone_low (lower boundary of the FVG gap) — same reference for both long and short"
+    else:
+        entry_desc = "midpoint of the FVG zone: (zone_low + zone_high) / 2"
+
+    if sl_mode == "signal_candle":
+        sl_desc_long  = "iLow(NULL,0,1)  — low of bar[1] (the last closed signal bar)"
+        sl_desc_short = "iHigh(NULL,0,1) — high of bar[1] (the last closed signal bar)"
+    elif sl_mode == "impulse_candle":
+        sl_desc_long  = "zone.impulse_low  — low of bar[2] stored when the FVG was detected"
+        sl_desc_short = "zone.impulse_high — high of bar[2] stored when the FVG was detected"
+    else:  # fvg_edge
+        sl_desc_long  = "zone.zone_low  — lower edge of the bullish FVG gap"
+        sl_desc_short = "zone.zone_high — upper edge of the bearish FVG gap"
+
+    return f"""## Strategy: Fair Value Gap (FVG)
+## Platform: MetaTrader {mt_ver} ({lang})
+## Instrument: {params.get('symbol', 'XAUUSD')}
+## Timeframe: {params.get('timeframe', 'H1')}
+
+### Backtest Performance
+{perf}
+
+### Parameters
+{param_lines_str}
+
+---
+
+## Bar Index Convention (MQL)
+
+All bar references use standard MQL indexing on the **chart timeframe**:
+- `bar[0]` — current forming bar (only its open is valid)
+- `bar[1]` — last **closed** bar → this is the **signal bar** where entry conditions are evaluated
+- `bar[2]` — 2 bars ago → the **impulse candle** (middle of the 3-bar FVG pattern)
+- `bar[3]` — 3 bars ago → the **first candle** of the 3-bar FVG pattern
+
+The EA fires once per bar via a new-bar guard, so "current Ask/Bid" at entry time equals bar[0]'s open price — matching the backtest engine's no-lookahead rule (signal on bar[1] → fill at bar[0] open).
+
+---
+
+## Input Groups
+
+Group all `input` variables under labelled sections using `input group "..."` (MQL5) or string separator inputs (MQL4):
+- `"=== Trend Filter ==="` — ema_period, ema_timeframe
+- `"=== FVG Detection ==="` — fvg_min_size, max_fvg_bars, min_sl_pips
+- `"=== Entry & Exit ==="` — rr_ratio, entry_mode, sl_mode
+- `"=== Session Filter ==="` — sessions (display label)
+- `"=== Sideways Filter ==="` — sideways_filter and its sub-parameters
+{risk_mgmt_line}
+- `"=== Execution ==="` — magic_number, commission_per_lot
+
+---
+
+## Global State
+
+```
+int      g_ema_handle      // created in OnInit
+datetime g_last_bar_time   // new-bar guard
+
+struct FVGZone {{
+  int      direction;      // 1=bullish, -1=bearish
+  double   zone_low;       // lower bound of the gap
+  double   zone_high;      // upper bound of the gap
+  double   impulse_low;    // bar[2].low at creation time
+  double   impulse_high;   // bar[2].high at creation time
+  int      age;            // bars elapsed since creation (starts at 0, not incremented on creation bar)
+  datetime created_time;   // iTime(NULL,0,1) at creation — used to skip same-bar entry
+  bool     active;
+}};
+FVGZone g_fvg_zones[20];
+int     g_fvg_count;
+```
+
+---
+
+## OnTick Logic
+
+### Step 1 — New-bar guard
+Read `iTime(NULL,0,0)`. If equal to `g_last_bar_time` → return (same bar, nothing to do).
+Otherwise update `g_last_bar_time = iTime(NULL,0,0)` and proceed.
+
+### Step 2 — Detect new FVG using bar[1], bar[2], bar[3]
+
+Read OHLC for the three relevant closed bars:
+```
+double h1 = iHigh(NULL,0,1),  l1 = iLow(NULL,0,1);   // bar[1] — last closed (signal bar)
+double h2 = iHigh(NULL,0,2),  l2 = iLow(NULL,0,2);   // bar[2] — impulse candle
+double h3 = iHigh(NULL,0,3),  l3 = iLow(NULL,0,3);   // bar[3] — first FVG candle
+datetime bar1_time = iTime(NULL,0,1);
+```
+
+**Bullish FVG** — `h3 < l1` (gap between bar[3].high and bar[1].low):
+- gap_size = l1 - h3
+- If gap_size >= {fvg_min}: add zone {{ direction=1, zone_low=h3, zone_high=l1, impulse_low=l2, impulse_high=h2, age=0, created_time=bar1_time, active=true }}
+
+**Bearish FVG** — `l3 > h1` (gap between bar[1].high and bar[3].low):
+- gap_size = l3 - h1
+- If gap_size >= {fvg_min}: add zone {{ direction=-1, zone_low=h1, zone_high=l3, impulse_low=l2, impulse_high=h2, age=0, created_time=bar1_time, active=true }}
+
+**IMPORTANT — gap_size comparison**: `{fvg_min}` is a raw price value (e.g. 2.0 means a $2 gap for XAUUSD). Compare `gap_size >= {fvg_min}` directly. Do **NOT** multiply by `_Point` — that would shrink the threshold by a factor of 100 and accept nearly every gap.
+
+### Step 3 — Age and prune stale zones
+
+For each active zone where `zone.created_time != iTime(NULL,0,1)` (i.e., NOT created this bar):
+- Increment `zone.age`
+- If `zone.age > {max_bars}`: mark inactive and skip
+
+Zones created this bar (created_time == iTime(NULL,0,1)) keep age=0 and are NOT eligible for entry this bar.
+
+### Step 4 — EMA trend filter
+
+Read EMA({ema_p}) at bar[1] (the last closed bar):
+- MQL4: `double ema_val = iMA(NULL,0,{ema_p},0,MODE_EMA,PRICE_CLOSE,1);`
+- MQL5: `double ema_buf[1]; CopyBuffer(g_ema_handle,0,1,1,ema_buf); double ema_val=ema_buf[0];`
+
+### Step 5 — Sideways filter
+{filter_desc}
+
+### Step 6 — Check active FVG zones for entry
+
+Read bar[1] values (the signal bar — last closed bar):
+```
+double sig_low   = iLow(NULL,0,1);
+double sig_high  = iHigh(NULL,0,1);
+double sig_close = iClose(NULL,0,1);
+```
+
+Iterate active zones. Skip any zone where `zone.created_time == iTime(NULL,0,1)` (just formed — no same-bar entry). Process at most one entry per bar (first qualifying zone wins); after a trade is placed, stop iterating.
+
+**Bullish FVG entry** (all conditions must be true):
+- `zone.direction == 1`
+- `sig_low <= zone.zone_high`  — bar[1] retraced down into the gap
+- `sig_close >= zone.zone_low` — bar[1] closed inside or above the gap bottom
+- `sig_close > ema_val`        — bar[1] closed above EMA (uptrend)
+- `trend_ok_long`              — sideways filter passed for longs
+- No open BUY position with this EA's magic number
+
+If all true:
+- `entry_ref = {entry_desc}`  ← used only for TP calculation
+- `sl_price  = {sl_desc_long}`
+- `ask       = SymbolInfoDouble(_Symbol, SYMBOL_ASK)`  ← actual fill price
+- `lot_sl_dist = ask - sl_price`   ← **use Ask→SL for lot sizing**, NOT entry_ref→SL
+- If `lot_sl_dist <= 0`: skip (SL above Ask — degenerate)
+- `tp_sl_dist = entry_ref - sl_price`
+- If `tp_sl_dist < {min_sl_pips}`: skip — 1R distance too small (below min_sl_pips={min_sl_pips})
+- `tp_price  = entry_ref + {rr} * tp_sl_dist`
+- Compute lots using `lot_sl_dist` (Ask to SL): `lots = risk_amount / (lot_sl_dist * contract_size)`
+- Place **BUY** market order at Ask; set SL=sl_price, TP=tp_price
+- Mark zone inactive
+
+**IMPORTANT — lot sizing for BUY**: use `|Ask - sl_price|` as the SL distance, not `|entry_ref - sl_price|`. The entry happens at Ask (the real fill price), not at entry_ref (which is only used to anchor the TP level).
+
+**Bearish FVG entry** (all conditions must be true):
+- `zone.direction == -1`
+- `sig_high >= zone.zone_low`   — bar[1] retraced up into the gap
+- `sig_close <= zone.zone_high` — bar[1] closed inside or below the gap top
+- `sig_close < ema_val`         — bar[1] closed below EMA (downtrend)
+- `trend_ok_short`              — sideways filter passed for shorts
+- No open SELL position with this EA's magic number
+
+If all true:
+- `entry_ref = {entry_desc}`  ← used only for TP calculation
+- `sl_price  = {sl_desc_short}`
+- `bid       = SymbolInfoDouble(_Symbol, SYMBOL_BID)`  ← actual fill price
+- `lot_sl_dist = sl_price - bid`   ← **use SL→Bid for lot sizing**, NOT sl_price→entry_ref
+- If `lot_sl_dist <= 0`: skip (SL below Bid — degenerate)
+- `tp_sl_dist = sl_price - entry_ref`
+- If `tp_sl_dist < {min_sl_pips}`: skip — 1R distance too small (below min_sl_pips={min_sl_pips})
+- If `tp_sl_dist <= 0`: skip this zone
+- `tp_price  = entry_ref - {rr} * tp_sl_dist`
+- Compute lots using `lot_sl_dist` (SL to Bid): `lots = risk_amount / (lot_sl_dist * contract_size)`
+- Place **SELL** market order at Bid; set SL=sl_price, TP=tp_price
+- Mark zone inactive
+
+**IMPORTANT — lot sizing for SELL**: use `|sl_price - Bid|` as the SL distance, not `|sl_price - entry_ref|`. The entry happens at Bid (the real fill price), not at entry_ref.
+
+### Step 7 — Session filter
+{session_sec}
+
+---
+
+## Risk & Lot Sizing
+{_risk_block(params, lang)}
+
+---
+
+## Code Requirements
+{_code_req(lang, mt_ver)}"""
+
+
+# ---------------------------------------------------------------------------
 # Dispatcher
 # ---------------------------------------------------------------------------
 
@@ -1522,6 +1738,8 @@ def _build_prompt(strategy: str, params: dict, results: dict, platform: str) -> 
         return _prompt_order_block_smc(params, lang, mt_ver, perf, param_lines_str)
     elif strategy == "n_structure":
         return _prompt_n_structure(params, lang, mt_ver, perf, param_lines_str)
+    elif strategy == "fair_value_gap":
+        return _prompt_fair_value_gap(params, lang, mt_ver, perf, param_lines_str)
     else:
         return _prompt_william_fractals(params, lang, mt_ver, perf, param_lines_str)
 

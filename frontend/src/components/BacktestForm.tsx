@@ -311,6 +311,28 @@ const PARAM_META: Record<string, ParamInfo> = {
     description:
       'Retracement level of the impulse leg where the limit order is placed. 0.382 = 38.2% retracement (shallow), 0.5 = 50%, 0.618 = 61.8% (golden ratio), 0.786 = 78.6% (deep). Price must pull back to this level after the swing is confirmed to trigger entry.',
   },
+
+  // Fair Value Gap
+  fvg_min_size: {
+    label: 'Min FVG Size',
+    description:
+      'Minimum gap size in price units for a 3-candle imbalance to qualify as a valid FVG. Filters out tiny gaps caused by normal spread. e.g. 2.0 = the gap must be at least 2 price units wide.',
+  },
+  max_fvg_bars: {
+    label: 'Max FVG Bars',
+    description:
+      'Maximum number of bars to keep a Fair Value Gap active after it forms. If price has not retraced into the zone within this window, the FVG is discarded.',
+  },
+  min_sl_pips: {
+    label: 'Min 1R Distance',
+    description:
+      'Minimum required SL distance (in price units) for a trade to be taken. Skips FVG entries where the zone is too narrow to justify the trade. e.g. 5.0 = at least $5 SL distance for XAUUSD (≈ 50 pips). Default: 5.0.',
+  },
+  entry_mode: {
+    label: 'Entry Reference',
+    description:
+      'Which price level within the FVG zone is used as the reference for SL/TP calculation. zone_top = upper edge of gap, zone_mid = midpoint (default), zone_bottom = lower edge of gap.',
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -474,6 +496,35 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
     {
       title: 'Session Filter',
       params: ['sessions'],
+    },
+    {
+      title: 'Sideways Filter',
+      params: [
+        'sideways_filter',
+        'adx_period', 'adx_threshold',
+        'ema_slope_period', 'ema_slope_min',
+        'choppiness_period', 'choppiness_max',
+        'alligator_jaw', 'alligator_teeth', 'alligator_lips',
+        'stochrsi_rsi_period', 'stochrsi_stoch_period', 'stochrsi_oversold', 'stochrsi_overbought',
+      ],
+    },
+  ],
+  fair_value_gap: [
+    {
+      title: 'Trend Filter',
+      params: ['ema_period', 'ema_timeframe'],
+    },
+    {
+      title: 'FVG Detection',
+      params: ['fvg_min_size', 'max_fvg_bars', 'min_sl_pips'],
+    },
+    {
+      title: 'Swing Structure',
+      params: ['swing_n_before', 'swing_n_after'],
+    },
+    {
+      title: 'Entry & Exit',
+      params: ['rr_ratio', 'entry_mode', 'sl_mode', 'sessions'],
     },
     {
       title: 'Sideways Filter',
