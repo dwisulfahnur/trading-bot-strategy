@@ -412,20 +412,6 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
       params: ['sessions'],
     },
   ],
-  order_block_smc: [
-    {
-      title: 'Order Block Detection',
-      params: ['structure_period', 'ob_lookback'],
-    },
-    {
-      title: 'Entry & Exit',
-      params: ['rr_ratio', 'sl_mode', 'sessions'],
-    },
-    {
-      title: 'Confluence Filters',
-      params: ['require_fvg', 'require_ote', 'ote_fib_low', 'ote_fib_high'],
-    },
-  ],
   n_structure: [
     {
       title: 'Signal Generation',
