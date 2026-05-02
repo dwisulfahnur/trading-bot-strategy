@@ -78,12 +78,13 @@ def fmt_elapsed(seconds: float) -> str:
 
 def find_source(year: int, symbol: str = "XAUUSD") -> tuple[Path, str]:
     """Return (path, kind) where kind is 'csv' or 'zip'."""
-    csv = DATA_DIR / f"Exness_{symbol}_Raw_Spread_{year}.csv"
-    zp  = DATA_DIR / f"Exness_{symbol}_Raw_Spread_{year}.zip"
-    if csv.exists():
-        return csv, "csv"
-    if zp.exists():
-        return zp, "zip"
+    for label in ("Raw_Spread", "Zero_Spread"):
+        csv = DATA_DIR / f"Exness_{symbol}_{label}_{year}.csv"
+        zp  = DATA_DIR / f"Exness_{symbol}_{label}_{year}.zip"
+        if csv.exists():
+            return csv, "csv"
+        if zp.exists():
+            return zp, "zip"
     raise FileNotFoundError(f"No CSV or ZIP found for year {year} in {DATA_DIR}")
 
 
