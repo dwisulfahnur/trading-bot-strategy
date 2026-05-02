@@ -16,10 +16,7 @@ backtest-xauusd/
 │   ├── base.py              # Abstract BaseStrategy class
 │   ├── william_fractals.py  # William Fractal Breakout strategy
 │   ├── n_structure.py       # N Structure Breakout strategy
-│   ├── momentum_candle.py  # Momentum Candle strategy
-│   ├── order_block_smc.py   # Order Block (SMC) strategy
-│   ├── support_resistance.py # Support & Resistance Bounce strategy
-│   └── grid.py              # Grid Trading strategy
+│   └── momentum_candle.py  # Momentum Candle strategy
 ├── backend/
 │   ├── main.py              # FastAPI app entry point (includes auth routes)
 │   ├── models.py            # Pydantic request/response models
