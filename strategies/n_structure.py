@@ -32,7 +32,9 @@ class NStructureStrategy(BaseStrategy):
     def __init__(
         self,
         ema_period: int = 200,
+        ema_fast_period: int = 50,
         ema_timeframe: str = "same",
+        ema_filter_mode: str = "single",
         symbol: str = "XAUUSD",
         swing_n_before: int = 5,
         swing_n_after: int = 5,
@@ -60,7 +62,9 @@ class NStructureStrategy(BaseStrategy):
         stochrsi_overbought: float = 80.0,
     ) -> None:
         self.ema_period = ema_period
+        self.ema_fast_period = ema_fast_period
         self.ema_timeframe = ema_timeframe
+        self.ema_filter_mode = ema_filter_mode
         self.symbol = symbol
         self.swing_n_before = swing_n_before
         self.swing_n_after = swing_n_after
@@ -90,9 +94,10 @@ class NStructureStrategy(BaseStrategy):
 
     def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
         if self.ema_timeframe == "same":
-            df = df.with_columns(
-                pl.col("close").ewm_mean(span=self.ema_period, adjust=False).alias("ema")
-            )
+            df = df.with_columns([
+                pl.col("close").ewm_mean(span=self.ema_period,      adjust=False).alias("ema"),
+                pl.col("close").ewm_mean(span=self.ema_fast_period, adjust=False).alias("_ema_fast"),
+            ])
         else:
             df = self._load_htf_ema(df)
 
@@ -113,7 +118,7 @@ class NStructureStrategy(BaseStrategy):
             pl.Series("cancel_level",  cancel_levels, dtype=pl.Float64),
         ])
 
-        df = df.drop(["_sh", "_sl", "_trend_ok_long", "_trend_ok_short"])
+        df = df.drop(["_sh", "_sl", "_ema_fast", "_trend_ok_long", "_trend_ok_short"])
 
         return self._apply_session_filter(df, self.sessions)
 
@@ -136,10 +141,11 @@ class NStructureStrategy(BaseStrategy):
         htf = (
             pl.concat(frames)
             .sort("time")
-            .with_columns(
-                pl.col("close").ewm_mean(span=self.ema_period, adjust=False).alias("ema")
-            )
-            .select(["time", "ema"])
+            .with_columns([
+                pl.col("close").ewm_mean(span=self.ema_period,      adjust=False).alias("ema"),
+                pl.col("close").ewm_mean(span=self.ema_fast_period, adjust=False).alias("_ema_fast"),
+            ])
+            .select(["time", "ema", "_ema_fast"])
         )
         return df.sort("time").join_asof(htf, on="time", strategy="backward")
 
@@ -190,10 +196,21 @@ class NStructureStrategy(BaseStrategy):
         high           = df["high"].to_list()
         low            = df["low"].to_list()
         ema            = df["ema"].to_list()
+        ema_fast       = df["_ema_fast"].to_list()
         trend_ok_long  = df["_trend_ok_long"].to_list()
         trend_ok_short = df["_trend_ok_short"].to_list()
 
         n_bars         = len(close)
+
+        if self.ema_filter_mode == "none":
+            ema_ok_long_arr  = [True] * n_bars
+            ema_ok_short_arr = [True] * n_bars
+        elif self.ema_filter_mode == "dual":
+            ema_ok_long_arr  = [ef is not None and es is not None and ef > es for ef, es in zip(ema_fast, ema)]
+            ema_ok_short_arr = [ef is not None and es is not None and ef < es for ef, es in zip(ema_fast, ema)]
+        else:  # "single"
+            ema_ok_long_arr  = [es is not None and c > es for c, es in zip(close, ema)]
+            ema_ok_short_arr = [es is not None and c < es for c, es in zip(close, ema)]
         signals        = [0]    * n_bars
         sl_out         = [None] * n_bars
         tp_out         = [None] * n_bars
@@ -235,7 +252,7 @@ class NStructureStrategy(BaseStrategy):
                     and last_sh is not None
                     and hl is not None
                     and c < last_sh                     # breakout hasn't happened yet
-                    and c > ema[i]
+                    and ema_ok_long_arr[i]
                     and trend_ok_long[i]):
 
                 entry_stop = last_sh
@@ -260,7 +277,7 @@ class NStructureStrategy(BaseStrategy):
                     and last_sl is not None
                     and lh is not None
                     and c > last_sl                     # breakdown hasn't happened yet
-                    and c < ema[i]
+                    and ema_ok_short_arr[i]
                     and trend_ok_short[i]):
 
                 entry_stop = last_sl

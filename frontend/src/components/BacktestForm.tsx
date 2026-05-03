@@ -199,10 +199,15 @@ const PARAM_META: Record<string, ParamInfo> = {
     description:
       'How close price must get to a S/R level to count as a "touch". e.g. 0.5 means the candle low only needs to reach within $0.50 of the support level to trigger a bounce signal. Increase if too few signals; decrease for stricter touches.',
   },
-  use_ema_filter: {
-    label: 'EMA Trend Filter',
+  ema_fast_period: {
+    label: 'Fast EMA Period',
     description:
-      'When ON, buy signals are only taken when price is above the EMA (uptrend) and sell signals only when below (downtrend). Turn OFF to allow counter-trend S/R trades in both directions.',
+      'The faster EMA used in dual-EMA mode. When fast EMA is above slow EMA → bullish bias (longs only). When fast EMA is below slow EMA → bearish bias (shorts only).',
+  },
+  ema_filter_mode: {
+    label: 'EMA Filter Mode',
+    description:
+      'None: no EMA filter, take BOS signals in both directions. Single: price must be above slow EMA for longs, below for shorts. Dual: fast EMA must be above slow EMA for longs, below for shorts (crossover-based trend bias).',
   },
 
   // Grid Trading
@@ -348,7 +353,7 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
   william_fractals: [
     {
       title: 'Signal Generation',
-      params: ['ema_period', 'ema_timeframe', 'fractal_n', 'rr_ratio'],
+      params: ['ema_filter_mode', 'ema_period', 'ema_fast_period', 'ema_timeframe', 'fractal_n', 'rr_ratio'],
     },
     {
       title: 'Session Filter',
@@ -415,7 +420,7 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
   n_structure: [
     {
       title: 'Signal Generation',
-      params: ['ema_period', 'ema_timeframe', 'swing_n_before', 'swing_n_after', 'rr_ratio', 'sl_mode'],
+      params: ['ema_filter_mode', 'ema_period', 'ema_fast_period', 'ema_timeframe', 'swing_n_before', 'swing_n_after', 'rr_ratio', 'sl_mode'],
     },
     {
       title: 'Pending Order',
@@ -473,7 +478,7 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
   momentum_candle: [
     {
       title: 'Signal Generation',
-      params: ['ema_period', 'body_ratio_min', 'volume_factor', 'volume_lookback'],
+      params: ['ema_filter_mode', 'ema_period', 'ema_fast_period', 'body_ratio_min', 'volume_factor', 'volume_lookback'],
     },
     {
       title: 'Entry & Exit',
@@ -511,6 +516,31 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
     {
       title: 'Entry & Exit',
       params: ['rr_ratio', 'entry_mode', 'sl_mode', 'sessions'],
+    },
+    {
+      title: 'Sideways Filter',
+      params: [
+        'sideways_filter',
+        'adx_period', 'adx_threshold',
+        'ema_slope_period', 'ema_slope_min',
+        'choppiness_period', 'choppiness_max',
+        'alligator_jaw', 'alligator_teeth', 'alligator_lips',
+        'stochrsi_rsi_period', 'stochrsi_stoch_period', 'stochrsi_oversold', 'stochrsi_overbought',
+      ],
+    },
+  ],
+  breakout_strategy: [
+    {
+      title: 'Signal Generation',
+      params: ['swing_n_before', 'swing_n_after', 'rr_ratio', 'sl_mode'],
+    },
+    {
+      title: 'EMA Trend Filter',
+      params: ['ema_filter_mode', 'ema_period', 'ema_fast_period', 'ema_timeframe'],
+    },
+    {
+      title: 'Session Filter',
+      params: ['sessions'],
     },
     {
       title: 'Sideways Filter',
@@ -581,6 +611,17 @@ const OPTION_LABELS: Record<string, Record<string, string>> = {
     choppiness:  'Choppiness Index',
     alligator:   'Alligator — line alignment',
     stochrsi:    'Stoch RSI — pullback zone',
+  },
+  sl_mode: {
+    swing_midpoint:  'Swing Midpoint — (H1 + HL) / 2',
+    swing_point:     'Swing Point — at HL / LH',
+    signal_candle:   'Signal Candle — low / high of signal bar',
+    structure:       'Structure — last Higher Low / Lower High',
+  },
+  ema_filter_mode: {
+    none:   'None — no filter, both directions',
+    single: 'Single EMA — price vs slow EMA',
+    dual:   'Dual EMA — fast EMA vs slow EMA',
   },
   pending_cancel: {
     none:     'None — stay open until filled',
@@ -1187,6 +1228,7 @@ export function BacktestForm({ onResult, initialParams }: Props) {
           const requireOte = (stratParams['require_ote'] ?? false) as boolean;
 
           const currentPendingCancel = (stratParams['pending_cancel'] ?? 'max_bars') as string;
+          const emaFilterMode = (stratParams['ema_filter_mode'] ?? 'dual') as string;
 
           const isVisible = (name: string): boolean => {
             if (name.startsWith('adx_'))        return currentFilter === 'adx';
@@ -1196,6 +1238,7 @@ export function BacktestForm({ onResult, initialParams }: Props) {
             if (name.startsWith('stochrsi_'))   return currentFilter === 'stochrsi';
             if (name.startsWith('mc_'))         return mcFilterOn;
             if (name.startsWith('ote_'))        return requireOte;
+            if (name === 'ema_fast_period')     return emaFilterMode === 'dual';
             if (name === 'max_pending_bars')    return currentPendingCancel === 'max_bars' || currentPendingCancel === 'both';
             return true;
           };

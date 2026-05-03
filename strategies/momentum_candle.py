@@ -59,6 +59,8 @@ class MomentumCandleStrategy(BaseStrategy):
     def __init__(
         self,
         ema_period: int = 200,
+        ema_fast_period: int = 50,
+        ema_filter_mode: str = "single",
         body_ratio_min: float = 0.70,
         volume_factor: float = 1.5,
         volume_lookback: int = 23,
@@ -88,6 +90,8 @@ class MomentumCandleStrategy(BaseStrategy):
         stochrsi_overbought: float = 80.0,
     ) -> None:
         self.ema_period = ema_period
+        self.ema_fast_period = ema_fast_period
+        self.ema_filter_mode = ema_filter_mode
         self.body_ratio_min = body_ratio_min
         self.volume_factor = volume_factor
         self.volume_lookback = volume_lookback
@@ -116,9 +120,10 @@ class MomentumCandleStrategy(BaseStrategy):
 
     def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
         # EMA trend filter
-        df = df.with_columns(
-            pl.col("close").ewm_mean(span=self.ema_period, adjust=False).alias("ema")
-        )
+        df = df.with_columns([
+            pl.col("close").ewm_mean(span=self.ema_period,      adjust=False).alias("ema"),
+            pl.col("close").ewm_mean(span=self.ema_fast_period, adjust=False).alias("_ema_fast"),
+        ])
 
         # Body ratio: |close - open| / (high - low)
         df = df.with_columns(
@@ -140,6 +145,16 @@ class MomentumCandleStrategy(BaseStrategy):
         # Add _trend_ok_long / _trend_ok_short columns based on selected filter
         df = self._add_sideways_filter(df)
 
+        if self.ema_filter_mode == "dual":
+            ema_ok_long  = pl.col("_ema_fast") > pl.col("ema")
+            ema_ok_short = pl.col("_ema_fast") < pl.col("ema")
+        elif self.ema_filter_mode == "single":
+            ema_ok_long  = pl.col("close") > pl.col("ema")
+            ema_ok_short = pl.col("close") < pl.col("ema")
+        else:  # "none"
+            ema_ok_long  = pl.lit(True)
+            ema_ok_short = pl.lit(True)
+
         # Momentum candle flag (direction-agnostic)
         is_mc = (
             (pl.col("_body_ratio") >= self.body_ratio_min)
@@ -149,8 +164,8 @@ class MomentumCandleStrategy(BaseStrategy):
         bullish = pl.col("close") > pl.col("open")
         bearish = pl.col("close") < pl.col("open")
 
-        buy_cond  = is_mc & bullish & (pl.col("close") > pl.col("ema")) & pl.col("_trend_ok_long")
-        sell_cond = is_mc & bearish & (pl.col("close") < pl.col("ema")) & pl.col("_trend_ok_short")
+        buy_cond  = is_mc & bullish & ema_ok_long  & pl.col("_trend_ok_long")
+        sell_cond = is_mc & bearish & ema_ok_short & pl.col("_trend_ok_short")
 
         candle_range = pl.col("high") - pl.col("low")
         r = self.retracement_pct
@@ -189,5 +204,5 @@ class MomentumCandleStrategy(BaseStrategy):
         )
 
         df = df.with_columns([signal, entry_limit, sl, tp])
-        df = df.drop(["_body_ratio", "_avg_ticks", "_trend_ok_long", "_trend_ok_short"])
+        df = df.drop(["_body_ratio", "_avg_ticks", "_ema_fast", "_trend_ok_long", "_trend_ok_short"])
         return self._apply_session_filter(df, self.sessions)

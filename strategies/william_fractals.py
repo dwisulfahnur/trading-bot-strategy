@@ -39,7 +39,9 @@ class WilliamFractalsStrategy(BaseStrategy):
     def __init__(
         self,
         ema_period: int = 200,
+        ema_fast_period: int = 50,
         ema_timeframe: str = "same",
+        ema_filter_mode: str = "single",
         symbol: str = "XAUUSD",
         fractal_n: int = 9,
         rr_ratio: float = 1.5,
@@ -72,7 +74,9 @@ class WilliamFractalsStrategy(BaseStrategy):
         stochrsi_overbought: float = 80.0,
     ) -> None:
         self.ema_period = ema_period
+        self.ema_fast_period = ema_fast_period
         self.ema_timeframe = ema_timeframe
+        self.ema_filter_mode = ema_filter_mode
         self.symbol = symbol
         self.fractal_n = fractal_n
         self.rr_ratio = rr_ratio
@@ -104,7 +108,10 @@ class WilliamFractalsStrategy(BaseStrategy):
         n = self.fractal_n
 
         if self.ema_timeframe == "same":
-            df = df.with_columns(self._ema(self.ema_period))
+            df = df.with_columns([
+                self._ema(self.ema_period),
+                pl.col("close").ewm_mean(span=self.ema_fast_period, adjust=False).alias("_ema_fast"),
+            ])
         else:
             df = self._load_htf_ema(df)
 
@@ -130,7 +137,7 @@ class WilliamFractalsStrategy(BaseStrategy):
             df
             .with_columns(self._signals())
             .drop(["_fractal_top", "_fractal_bot", "_trend_ok_long", "_trend_ok_short",
-                   "_mc_ok_long", "_mc_ok_short"])
+                   "_mc_ok_long", "_mc_ok_short", "_ema_fast"])
         )
         return self._apply_session_filter(df, self.sessions)
 
@@ -160,10 +167,11 @@ class WilliamFractalsStrategy(BaseStrategy):
         htf = (
             pl.concat(frames)
             .sort("time")
-            .with_columns(
-                pl.col("close").ewm_mean(span=self.ema_period, adjust=False).alias("ema")
-            )
-            .select(["time", "ema"])
+            .with_columns([
+                pl.col("close").ewm_mean(span=self.ema_period,      adjust=False).alias("ema"),
+                pl.col("close").ewm_mean(span=self.ema_fast_period, adjust=False).alias("_ema_fast"),
+            ])
+            .select(["time", "ema", "_ema_fast"])
         )
 
         # For each bar in df, take the EMA value from the most recent HTF bar at or before it
@@ -192,8 +200,15 @@ class WilliamFractalsStrategy(BaseStrategy):
     def _signals(self) -> list[pl.Expr]:
         rr = self.rr_ratio
 
-        in_uptrend   = pl.col("close") > pl.col("ema")
-        in_downtrend = pl.col("close") < pl.col("ema")
+        if self.ema_filter_mode == "dual":
+            in_uptrend   = pl.col("_ema_fast") > pl.col("ema")
+            in_downtrend = pl.col("_ema_fast") < pl.col("ema")
+        elif self.ema_filter_mode == "single":
+            in_uptrend   = pl.col("close") > pl.col("ema")
+            in_downtrend = pl.col("close") < pl.col("ema")
+        else:  # "none"
+            in_uptrend   = pl.lit(True)
+            in_downtrend = pl.lit(True)
 
         buy_breakout = (
             pl.col("close") > pl.col("last_top")

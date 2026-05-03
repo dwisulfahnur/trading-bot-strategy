@@ -27,6 +27,9 @@ VALID_TIMEFRAMES = ["M1", "M5", "M15", "H1", "H4"]
 STRATEGY_PARAMS: dict[str, list[dict]] = {
     "momentum_candle": [
         {"name": "ema_period",        "type": "int",   "default": 200,  "min": 10,  "max": 500},
+        {"name": "ema_fast_period",   "type": "int",   "default": 50,   "min": 5,   "max": 300},
+        {"name": "ema_filter_mode",   "type": "str",   "default": "single",
+         "options": ["none", "single", "dual"]},
         {"name": "body_ratio_min",    "type": "float", "default": 0.70, "min": 0.5, "max": 0.95, "step": 0.01},
         {"name": "volume_factor",     "type": "float", "default": 1.5,  "min": 1.0, "max": 5.0,  "step": 0.1},
         {"name": "volume_lookback",   "type": "int",   "default": 23,   "min": 5,   "max": 100},
@@ -59,8 +62,11 @@ STRATEGY_PARAMS: dict[str, list[dict]] = {
     ],
     "william_fractals": [
         {"name": "ema_period",        "type": "int",   "default": 200,   "min": 10,   "max": 500},
+        {"name": "ema_fast_period",   "type": "int",   "default": 50,    "min": 5,    "max": 300},
         {"name": "ema_timeframe",     "type": "str",   "default": "same",
          "options": ["same", "M1", "M5", "M15", "H1", "H4", "D1"]},
+        {"name": "ema_filter_mode",   "type": "str",   "default": "single",
+         "options": ["none", "single", "dual"]},
         {"name": "fractal_n",         "type": "int",   "default": 9,     "min": 2,    "max": 20},
         {"name": "rr_ratio",          "type": "float", "default": 1.5,   "min": 0.5,  "max": 5.0,  "step": 0.1},
         # Market session filter
@@ -92,10 +98,47 @@ STRATEGY_PARAMS: dict[str, list[dict]] = {
         {"name": "stochrsi_oversold",     "type": "float", "default": 20.0, "min": 5.0,  "max": 40.0, "step": 1.0},
         {"name": "stochrsi_overbought",   "type": "float", "default": 80.0, "min": 60.0, "max": 95.0, "step": 1.0},
     ],
-    "n_structure": [
+    "breakout_strategy": [
         {"name": "ema_period",        "type": "int",   "default": 200,   "min": 10,   "max": 500},
+        {"name": "ema_fast_period",   "type": "int",   "default": 50,    "min": 5,    "max": 300},
         {"name": "ema_timeframe",     "type": "str",   "default": "same",
          "options": ["same", "M1", "M5", "M15", "H1", "H4", "D1"]},
+        {"name": "swing_n_before",    "type": "int",   "default": 5,     "min": 1,    "max": 20},
+        {"name": "swing_n_after",     "type": "int",   "default": 5,     "min": 1,    "max": 20},
+        {"name": "rr_ratio",          "type": "float", "default": 2.0,   "min": 0.5,  "max": 5.0,  "step": 0.1},
+        {"name": "sl_mode",           "type": "str",   "default": "structure",
+         "options": ["structure", "signal_candle"]},
+        {"name": "ema_filter_mode",   "type": "str",   "default": "dual",
+         "options": ["none", "single", "dual"]},
+        # Market session filter
+        {"name": "sessions",          "type": "str",   "default": "all",
+         "options": ["all", "asia", "london", "newyork",
+                     "asia_london", "london_newyork", "asia_newyork",
+                     "asia_london_newyork"]},
+        # Sideways / ranging filter
+        {"name": "sideways_filter",   "type": "str",   "default": "none",
+         "options": ["none", "adx", "ema_slope", "choppiness", "alligator", "stochrsi"]},
+        {"name": "adx_period",        "type": "int",   "default": 14,    "min": 5,    "max": 50},
+        {"name": "adx_threshold",     "type": "float", "default": 25.0,  "min": 10.0, "max": 50.0, "step": 1.0},
+        {"name": "ema_slope_period",  "type": "int",   "default": 10,    "min": 2,    "max": 50},
+        {"name": "ema_slope_min",     "type": "float", "default": 0.5,   "min": 0.1,  "max": 10.0, "step": 0.1},
+        {"name": "choppiness_period", "type": "int",   "default": 14,    "min": 5,    "max": 50},
+        {"name": "choppiness_max",    "type": "float", "default": 61.8,  "min": 50.0, "max": 80.0, "step": 0.1},
+        {"name": "alligator_jaw",     "type": "int",   "default": 13,    "min": 5,    "max": 50},
+        {"name": "alligator_teeth",   "type": "int",   "default": 8,     "min": 3,    "max": 30},
+        {"name": "alligator_lips",    "type": "int",   "default": 5,     "min": 2,    "max": 20},
+        {"name": "stochrsi_rsi_period",   "type": "int",   "default": 14,   "min": 5,    "max": 50},
+        {"name": "stochrsi_stoch_period", "type": "int",   "default": 14,   "min": 3,    "max": 50},
+        {"name": "stochrsi_oversold",     "type": "float", "default": 20.0, "min": 5.0,  "max": 40.0, "step": 1.0},
+        {"name": "stochrsi_overbought",   "type": "float", "default": 80.0, "min": 60.0, "max": 95.0, "step": 1.0},
+    ],
+    "n_structure": [
+        {"name": "ema_period",        "type": "int",   "default": 200,   "min": 10,   "max": 500},
+        {"name": "ema_fast_period",   "type": "int",   "default": 50,    "min": 5,    "max": 300},
+        {"name": "ema_timeframe",     "type": "str",   "default": "same",
+         "options": ["same", "M1", "M5", "M15", "H1", "H4", "D1"]},
+        {"name": "ema_filter_mode",   "type": "str",   "default": "single",
+         "options": ["none", "single", "dual"]},
         {"name": "swing_n_before",    "type": "int",   "default": 5,     "min": 1,    "max": 20},
         {"name": "swing_n_after",     "type": "int",   "default": 5,     "min": 1,    "max": 20},
         {"name": "rr_ratio",          "type": "float", "default": 2.0,   "min": 0.5,  "max": 5.0,  "step": 0.1},
@@ -132,6 +175,7 @@ DISPLAY_NAMES: dict[str, str] = {
     "n_structure":           "N Structure Breakout",
     "william_fractals":      "William Fractal Breakout",
     "momentum_candle":       "Momentum Candle",
+    "breakout_strategy":     "Market Structure Breakout",
 }
 
 

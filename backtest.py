@@ -615,8 +615,10 @@ def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float
             raise ValueError(f"Symbol '{symbol}' not found in PAIR_CONFIG. Add it to backtest.py before running.")
         contract_size  = PAIR_CONFIG[symbol]["contract_size"]
         lot_size       = round(risk_at_entry / t._initial_sl_dist / contract_size, 2) if t._initial_sl_dist > 0 else 0.0
+        lot_size       = max(0.01, lot_size)  # enforce broker minimum lot
+        actual_risk    = lot_size * t._initial_sl_dist * contract_size
         commission_usd = round(lot_size * commission_per_lot * 2, 2)  # round-trip (entry + exit)
-        profit_usd     = round(risk_at_entry * t.pnl_r - commission_usd, 2)
+        profit_usd     = round(actual_risk * t.pnl_r - commission_usd, 2)
         capital        = max(0.0, round(capital + profit_usd, 2))
 
         if capital > peak:
