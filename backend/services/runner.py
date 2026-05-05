@@ -50,6 +50,7 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
         max_sl_per_period = request_data.get("max_sl_per_period", None)
         sl_period = request_data.get("sl_period", "none")
         max_positions = int(request_data.get("max_positions", 1))
+        fixed_lot = request_data.get("fixed_lot", None)
         params = request_data.get("params", {})
         user_id = request_data.get("_user_id")
 
@@ -85,6 +86,15 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
                 int(params.get("max_pending_bars", 20))
                 if pending_cancel in ("max_bars", "both") else None
             )
+        elif strategy_name == "pip_breakout":
+            entry_mode = params.get("entry_mode", "close")
+            pending_cancel = params.get("pending_cancel", "max_bars")
+            has_stop_order = entry_mode == "touch" or params.get("entry_offset_pips", 0.0) > 0
+            max_pending_bars = (
+                int(params.get("max_pending_bars", 10))
+                if has_stop_order and pending_cancel in ("max_bars", "both")
+                else None
+            )
         else:
             max_pending_bars = None
         trades = simulate(
@@ -98,7 +108,7 @@ def run_backtest(job_id: str, request_data: dict[str, Any]) -> None:
             max_positions=max_positions,
         )
 
-        metrics = compute_metrics(trades, initial_capital, risk_pct, risk_recovery=risk_recovery, compound=compound, commission_per_lot=commission_per_lot, symbol=symbol, trail_recovery=trail_recovery, trail_recovery_pct=trail_recovery_pct)
+        metrics = compute_metrics(trades, initial_capital, risk_pct, risk_recovery=risk_recovery, compound=compound, commission_per_lot=commission_per_lot, symbol=symbol, trail_recovery=trail_recovery, trail_recovery_pct=trail_recovery_pct, fixed_lot=fixed_lot)
         metrics["compound"]       = compound
         metrics["breakeven_r"]    = breakeven_r
         metrics["breakeven_sl_r"] = breakeven_sl_r

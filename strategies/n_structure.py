@@ -25,6 +25,15 @@ from strategies.base import BaseStrategy
 
 _DATA_DIR = Path(__file__).parent.parent / "data" / "parquet" / "ohlcv"
 
+_PIP_MULT: dict[str, float] = {
+    "XAUUSD": 10.0,
+    "BTCUSD": 1.0,  "ETHUSD": 1.0,  "USTEC": 1.0,
+    "EURUSD": 10_000.0, "GBPUSD": 10_000.0,
+    "EURJPY": 100.0, "GBPJPY": 100.0, "USDJPY": 100.0,
+    "AUDJPY": 100.0, "CADJPY": 100.0, "CHFJPY": 100.0,
+    "EURGBP": 10_000.0,
+}
+
 
 class NStructureStrategy(BaseStrategy):
     name = "n_structure"
@@ -38,8 +47,11 @@ class NStructureStrategy(BaseStrategy):
         symbol: str = "XAUUSD",
         swing_n_before: int = 5,
         swing_n_after: int = 5,
+        sl_tp_mode: str = "rr",            # rr | pips
         rr_ratio: float = 2.0,
         sl_mode: str = "swing_midpoint",
+        sl_pips: float = 200.0,
+        tp_pips: float = 400.0,
         # Pending order cancellation
         pending_cancel: str = "max_bars",
         max_pending_bars: int = 10,
@@ -66,10 +78,14 @@ class NStructureStrategy(BaseStrategy):
         self.ema_timeframe = ema_timeframe
         self.ema_filter_mode = ema_filter_mode
         self.symbol = symbol
+        self.pip_mult = _PIP_MULT.get(symbol, 10.0)
         self.swing_n_before = swing_n_before
         self.swing_n_after = swing_n_after
+        self.sl_tp_mode = sl_tp_mode
         self.rr_ratio = rr_ratio
         self.sl_mode = sl_mode
+        self.sl_pips = sl_pips
+        self.tp_pips = tp_pips
         self.pending_cancel = pending_cancel
         self.max_pending_bars = max_pending_bars
         self.sessions = sessions
@@ -256,21 +272,32 @@ class NStructureStrategy(BaseStrategy):
                     and trend_ok_long[i]):
 
                 entry_stop = last_sh
-                if self.sl_mode == "swing_midpoint":
-                    sl_price = (last_sh + hl) / 2.0
-                elif self.sl_mode == "swing_point":
-                    sl_price = hl
-                else:                                   # signal_candle
-                    sl_price = low[i]
 
-                dist = entry_stop - sl_price
-                if dist > 0:
+                if self.sl_tp_mode == "pips":
+                    sl_d = self.sl_pips / self.pip_mult
+                    tp_d = self.tp_pips / self.pip_mult
                     signals[i]     = 1
                     entry_stops[i] = entry_stop
-                    sl_out[i]      = sl_price
-                    tp_out[i]      = entry_stop + self.rr_ratio * dist
+                    sl_out[i]      = entry_stop - sl_d
+                    tp_out[i]      = entry_stop + tp_d
                     if self.pending_cancel in ("hl_break", "both"):
-                        cancel_levels[i] = hl           # cancel if price breaks below HL
+                        cancel_levels[i] = hl
+                else:
+                    if self.sl_mode == "swing_midpoint":
+                        sl_price = (last_sh + hl) / 2.0
+                    elif self.sl_mode == "swing_point":
+                        sl_price = hl
+                    else:                               # signal_candle
+                        sl_price = low[i]
+
+                    dist = entry_stop - sl_price
+                    if dist > 0:
+                        signals[i]     = 1
+                        entry_stops[i] = entry_stop
+                        sl_out[i]      = sl_price
+                        tp_out[i]      = entry_stop + self.rr_ratio * dist
+                        if self.pending_cancel in ("hl_break", "both"):
+                            cancel_levels[i] = hl       # cancel if price breaks below HL
 
             # ── Arm bearish stop-sell at L1 when LH is confirmed ─────────
             elif (short_just_armed
@@ -281,20 +308,31 @@ class NStructureStrategy(BaseStrategy):
                     and trend_ok_short[i]):
 
                 entry_stop = last_sl
-                if self.sl_mode == "swing_midpoint":
-                    sl_price = (last_sl + lh) / 2.0
-                elif self.sl_mode == "swing_point":
-                    sl_price = lh
-                else:                                   # signal_candle
-                    sl_price = high[i]
 
-                dist = sl_price - entry_stop
-                if dist > 0:
+                if self.sl_tp_mode == "pips":
+                    sl_d = self.sl_pips / self.pip_mult
+                    tp_d = self.tp_pips / self.pip_mult
                     signals[i]     = -1
                     entry_stops[i] = entry_stop
-                    sl_out[i]      = sl_price
-                    tp_out[i]      = entry_stop - self.rr_ratio * dist
+                    sl_out[i]      = entry_stop + sl_d
+                    tp_out[i]      = entry_stop - tp_d
                     if self.pending_cancel in ("hl_break", "both"):
-                        cancel_levels[i] = lh           # cancel if price breaks above LH
+                        cancel_levels[i] = lh
+                else:
+                    if self.sl_mode == "swing_midpoint":
+                        sl_price = (last_sl + lh) / 2.0
+                    elif self.sl_mode == "swing_point":
+                        sl_price = lh
+                    else:                               # signal_candle
+                        sl_price = high[i]
+
+                    dist = sl_price - entry_stop
+                    if dist > 0:
+                        signals[i]     = -1
+                        entry_stops[i] = entry_stop
+                        sl_out[i]      = sl_price
+                        tp_out[i]      = entry_stop - self.rr_ratio * dist
+                        if self.pending_cancel in ("hl_break", "both"):
+                            cancel_levels[i] = lh       # cancel if price breaks above LH
 
         return signals, sl_out, tp_out, entry_stops, cancel_levels

@@ -53,6 +53,7 @@ export interface BacktestRequest {
   max_sl_per_period: number | null;
   sl_period: string;
   max_positions: number;
+  fixed_lot?: number | null;
   params: Record<string, number | boolean | string>;
 }
 

@@ -30,7 +30,7 @@ except ImportError:
 
 DATA_DIR = Path(__file__).parent / "data"
 
-YEARS = [2021, 2022, 2023, 2024, 2025, 2026]
+YEARS = [2020, 2021, 2022, 2023, 2024, 2025, 2026]
 
 # Timeframes to aggregate: label → truncation string for Polars
 TIMEFRAMES = {
@@ -89,8 +89,11 @@ def find_source(year: int, symbol: str = "XAUUSD") -> tuple[Path, str]:
 
 
 def find_monthly_sources(year: int, symbol: str = "XAUUSD") -> list[Path]:
-    """Return sorted list of monthly zip files like Exness_{SYMBOL}_Raw_Spread_2025_07.zip."""
-    return sorted(DATA_DIR.glob(f"Exness_{symbol}_Raw_Spread_{year}_??.zip"))
+    """Return sorted list of monthly zip files (Raw_Spread or Zero_Spread naming)."""
+    results = []
+    for label in ("Raw_Spread", "Zero_Spread"):
+        results.extend(DATA_DIR.glob(f"Exness_{symbol}_{label}_{year}_??.zip"))
+    return sorted(results)
 
 
 def find_mt5_exports(symbol: str = "XAUUSD") -> list[Path]:

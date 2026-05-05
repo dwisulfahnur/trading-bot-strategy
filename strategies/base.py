@@ -73,6 +73,10 @@ class BaseStrategy(ABC):
             exprs.append(
                 pl.when(in_session).then(pl.col("entry_limit")).otherwise(None).alias("entry_limit")
             )
+        if "entry_stop" in df.columns:
+            exprs.append(
+                pl.when(in_session).then(pl.col("entry_stop")).otherwise(None).alias("entry_stop")
+            )
 
         return df.with_columns(exprs)
 

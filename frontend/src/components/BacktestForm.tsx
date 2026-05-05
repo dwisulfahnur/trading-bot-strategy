@@ -258,6 +258,78 @@ const PARAM_META: Record<string, ParamInfo> = {
     description: 'Extra distance added beyond the range boundary for the stop-loss. e.g. 0.5 places SL 0.5 below range low (longs) or 0.5 above range high (shorts). Gives the trade more breathing room.',
   },
 
+  // Pip Breakout
+  level_detector: {
+    label: 'Level Detector',
+    description:
+      '"Rolling": channel is the N-bar rolling max high / min low — updates every bar. "Fractal": confirmed swing high/low (N bars on each side) — level is more significant but signals arrive later.',
+  },
+  lookback_bars: {
+    label: 'Lookback Bars',
+    description:
+      'Number of prior bars used to form the rolling high/low channel. A long signal fires when price closes above the prior N-bar high; a short signal when price closes below the prior N-bar low.',
+  },
+  fractal_n_before: {
+    label: 'Fractal N Before',
+    description:
+      'Number of bars to the LEFT of the swing point that must be lower (fractal high) or higher (fractal low). Higher = fewer but more significant fractal levels.',
+  },
+  fractal_n_after: {
+    label: 'Fractal N After',
+    description:
+      'Number of bars to the RIGHT of the swing point needed to confirm the fractal. Also controls how many bars later the signal can fire. Higher = stronger confirmation but later entry.',
+  },
+  sl_tp_mode: {
+    label: 'SL / TP Mode',
+    description:
+      '"RR Ratio" (default): take-profit is a multiple of the structural SL distance — e.g. 2.0 = 2× the SL distance. "Pips": fixed pip distances for both SL and TP, independent of market structure, converted to a price level using the pair\'s pip multiplier. "% of price" (pip_breakout only): SL/TP as a percentage of entry price.',
+  },
+  sl_pips: {
+    label: 'Stop-Loss (pips)',
+    description:
+      'Fixed stop-loss distance in pips from the entry level. e.g. 200 pips on XAUUSD = $20 price distance. Converted to a price level using the pair\'s pip multiplier.',
+  },
+  tp_pips: {
+    label: 'Take-Profit (pips)',
+    description:
+      'Fixed take-profit distance in pips from the entry level. e.g. 400 pips = 2× a 200-pip SL, giving a 2:1 RR.',
+  },
+  sl_pct: {
+    label: 'Stop-Loss (%)',
+    description:
+      'Stop-loss as a percentage of the entry price. e.g. 1.0% on an entry at 2000 places SL at 1980 (long) or 2020 (short). Scales automatically with price — useful when trading multiple pairs at very different price levels.',
+  },
+  tp_pct: {
+    label: 'Take-Profit (%)',
+    description:
+      'Take-profit as a percentage of the entry price. e.g. 2.0% on an entry at 2000 places TP at 2040 (long) or 1960 (short).',
+  },
+  entry_mode: {
+    label: 'Entry Mode',
+    description:
+      '"close" waits for the bar to close above the rolling high / below the rolling low before entering. "touch" places a buy stop / sell stop at the rolling level immediately — fills the moment price touches it intrabar, without waiting for a close.',
+  },
+  entry_offset_pips: {
+    label: 'Entry Offset (pips)',
+    description:
+      'Pips above the rolling high (buy stop) or below the rolling low (sell stop) where the entry order is placed. Set to 0 for a market order at the next bar\'s open (close mode) or stop at the exact rolling level (touch mode). SL and TP are anchored to the stop level.',
+  },
+  max_pending_bars: {
+    label: 'Max Pending Bars',
+    description:
+      'Cancel the stop order if it has not filled after this many bars. Active when cancel mode is "Max bars" or "Both".',
+  },
+  pending_cancel: {
+    label: 'Cancel Mode',
+    description:
+      'When to cancel a pending stop order. "Max bars": expire after N bars without a fill. "SL break": cancel immediately if price reaches or passes through the planned SL level (setup invalidated before entry). "Both": cancel on whichever condition triggers first. "None": keep the order open indefinitely.',
+  },
+  pending_cancel_buffer_pips: {
+    label: 'SL Break Buffer (pips)',
+    description:
+      'Extra pip distance added beyond the planned SL before triggering a cancel. 0 = cancel exactly at the SL level. Positive values require price to go X pips past the SL to confirm cancellation — avoids cancelling on a brief wick that immediately recovers.',
+  },
+
   // Order Block (SMC)
   structure_period: {
     label: 'Structure Period',
@@ -420,7 +492,7 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
   n_structure: [
     {
       title: 'Signal Generation',
-      params: ['ema_filter_mode', 'ema_period', 'ema_fast_period', 'ema_timeframe', 'swing_n_before', 'swing_n_after', 'rr_ratio', 'sl_mode'],
+      params: ['ema_filter_mode', 'ema_period', 'ema_fast_period', 'ema_timeframe', 'swing_n_before', 'swing_n_after', 'sl_tp_mode', 'rr_ratio', 'sl_mode', 'sl_pips', 'tp_pips'],
     },
     {
       title: 'Pending Order',
@@ -529,6 +601,35 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
       ],
     },
   ],
+  pip_breakout: [
+    {
+      title: 'Signal Generation',
+      params: ['level_detector', 'lookback_bars', 'fractal_n_before', 'fractal_n_after', 'sl_tp_mode', 'sl_pips', 'tp_pips', 'sl_pct', 'tp_pct', 'entry_mode', 'entry_offset_pips'],
+    },
+    {
+      title: 'Pending Order',
+      params: ['pending_cancel', 'max_pending_bars', 'pending_cancel_buffer_pips'],
+    },
+    {
+      title: 'EMA Trend Filter',
+      params: ['ema_filter_mode', 'ema_period', 'ema_fast_period', 'ema_timeframe'],
+    },
+    {
+      title: 'Session Filter',
+      params: ['sessions'],
+    },
+    {
+      title: 'Sideways Filter',
+      params: [
+        'sideways_filter',
+        'adx_period', 'adx_threshold',
+        'ema_slope_period', 'ema_slope_min',
+        'choppiness_period', 'choppiness_max',
+        'alligator_jaw', 'alligator_teeth', 'alligator_lips',
+        'stochrsi_rsi_period', 'stochrsi_stoch_period', 'stochrsi_oversold', 'stochrsi_overbought',
+      ],
+    },
+  ],
   breakout_strategy: [
     {
       title: 'Signal Generation',
@@ -618,6 +719,15 @@ const OPTION_LABELS: Record<string, Record<string, string>> = {
     signal_candle:   'Signal Candle — low / high of signal bar',
     structure:       'Structure — last Higher Low / Lower High',
   },
+  level_detector: {
+    rolling: 'Rolling — N-bar max/min channel',
+    fractal: 'Fractal — confirmed swing high/low',
+  },
+  sl_tp_mode: {
+    rr:   'RR Ratio — TP as multiple of SL distance',
+    pips: 'Pips — fixed pip distance',
+    pct:  '% of price — scales with entry level',
+  },
   ema_filter_mode: {
     none:   'None — no filter, both directions',
     single: 'Single EMA — price vs slow EMA',
@@ -627,6 +737,7 @@ const OPTION_LABELS: Record<string, Record<string, string>> = {
     none:     'None — stay open until filled',
     max_bars: 'Max bars — expire after N bars',
     hl_break: 'HL/LH break — cancel if structure invalidated',
+    sl_break: 'SL break — cancel if price reaches SL level',
     both:     'Both — whichever comes first',
   },
   sessions: {
@@ -702,6 +813,8 @@ export function BacktestForm({ onResult, initialParams }: Props) {
   const [slLimitPeriod, setSlLimitPeriod] = useState<'day' | 'week' | 'month'>('day');
   const [maxPositions, setMaxPositions] = useState(1);
   const [commissionPerLot, setCommissionPerLot] = useState(3.5);
+  const [fixedLotMode, setFixedLotMode] = useState(false);
+  const [fixedLot, setFixedLot] = useState(0.1);
   const [stratParams, setStratParams] = useState<Record<string, number | string | boolean>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -739,6 +852,8 @@ export function BacktestForm({ onResult, initialParams }: Props) {
     if (sp === 'day' || sp === 'week' || sp === 'month') setSlLimitPeriod(sp);
     if (initialParams.commission_per_lot != null) setCommissionPerLot(initialParams.commission_per_lot as number);
     if (initialParams.max_positions != null) setMaxPositions(initialParams.max_positions as number);
+    setFixedLotMode(initialParams.fixed_lot != null);
+    if (initialParams.fixed_lot != null) setFixedLot(initialParams.fixed_lot as number);
   }, [initialParams]);
 
   // Init strategy params from defaults, overlaying initialParams
@@ -806,17 +921,18 @@ export function BacktestForm({ onResult, initialParams }: Props) {
         timeframe,
         symbol: selectedSymbol,
         initial_capital: capital,
-        risk_pct: riskPct / 100,
-        risk_recovery: riskRecovery / 100,
-        trail_recovery: riskRecovery > 0 ? trailRecovery : false,
+        risk_pct: fixedLotMode ? 0.01 : riskPct / 100,
+        risk_recovery: fixedLotMode ? 0 : riskRecovery / 100,
+        trail_recovery: (!fixedLotMode && riskRecovery > 0) ? trailRecovery : false,
         trail_recovery_pct: trailRecoveryPct,
-        compound,
+        compound: fixedLotMode ? false : compound,
         breakeven_r:    breakevenOn ? breakevenR : null,
         breakeven_sl_r: breakevenOn ? breakevenSlR : 0.0,
         commission_per_lot: commissionPerLot,
         max_sl_per_period: slLimitOn ? slLimitMax : null,
         sl_period: slLimitOn ? slLimitPeriod : 'none',
         max_positions: maxPositions,
+        fixed_lot: fixedLotMode ? fixedLot : null,
         params: stratParams,
       };
       const job = await api.runBacktest(req);
@@ -962,90 +1078,137 @@ export function BacktestForm({ onResult, initialParams }: Props) {
           />
         </div>
 
-        {/* Risk % */}
-        <div>
-          <label className="block text-xs text-slate-400 mb-1">
-            Risk per Trade:{' '}
-            <span className="text-blue-400 font-bold">{riskPct}%</span>
-            <InfoTooltip text="Fraction of capital risked per trade. Lot size is calculated so that a full SL hit costs exactly this % of the account (or of initial capital if compounding is off)." />
-          </label>
-          <input
-            type="range"
-            min={0.5}
-            max={5}
-            step={0.5}
-            value={riskPct}
-            onChange={(e) => setRiskPct(Number(e.target.value))}
-            className="w-full accent-blue-500"
-          />
-          <div className="flex justify-between text-xs text-slate-500 mt-0.5">
-            <span>0.5%</span>
-            <span>5%</span>
-          </div>
+        {/* Risk Mode toggle */}
+        <div className="flex items-center gap-3">
+          <button
+            type="button"
+            onClick={() => setFixedLotMode((m) => !m)}
+            className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${
+              fixedLotMode ? 'bg-emerald-600' : 'bg-slate-600'
+            }`}
+          >
+            <span
+              className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                fixedLotMode ? 'translate-x-5' : ''
+              }`}
+            />
+          </button>
+          <span className="text-xs text-slate-400">
+            Risk Mode:{' '}
+            {fixedLotMode
+              ? <span className="text-emerald-400 font-semibold">Fixed Lot</span>
+              : <span className="text-blue-400 font-semibold">Risk % per Trade</span>}
+          </span>
+          <InfoTooltip text="Risk % per Trade: lot size auto-calculated to risk a fixed % of capital per trade. Fixed Lot: use the same lot size on every entry, regardless of SL distance." />
         </div>
 
-        {/* Recovery Risk */}
-        <div>
-          <label className="block text-xs text-slate-400 mb-1">
-            Recovery Risk:{' '}
-            <span className="text-blue-400 font-bold">{riskRecovery}%</span>
-            <InfoTooltip text="Reduced risk % applied when current capital falls below the initial capital. Set to 0 to disable." />
-          </label>
-          <input
-            type="range"
-            min={0}
-            max={5}
-            step={0.5}
-            value={riskRecovery}
-            onChange={(e) => setRiskRecovery(Number(e.target.value))}
-            className="w-full accent-blue-500"
-          />
-          <div className="flex justify-between text-xs text-slate-500 mt-0.5">
-            <span>Disabled (0%)</span>
-            <span>5%</span>
+        {fixedLotMode ? (
+          /* Fixed Lot input */
+          <div>
+            <label className="block text-xs text-slate-400 mb-1">
+              Fixed Lot Size
+              <InfoTooltip text="The exact lot size used on every trade. e.g. 0.1 = 1 mini-lot. Commission and profit are still tracked normally." />
+            </label>
+            <input
+              type="number"
+              value={fixedLot}
+              min={0.01}
+              step={0.01}
+              onChange={(e) => setFixedLot(Math.max(0.01, parseFloat(e.target.value) || 0.01))}
+              className="w-full bg-slate-800 border border-emerald-600/50 rounded-lg px-3 py-2 text-slate-100 text-sm focus:outline-none focus:border-emerald-500"
+            />
           </div>
-        </div>
-
-        {/* Trail Recovery Baseline */}
-        {riskRecovery > 0 && (
+        ) : (
           <>
-            <div className="flex items-center gap-3">
-              <button
-                type="button"
-                onClick={() => setTrailRecovery((t) => !t)}
-                className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${
-                  trailRecovery ? 'bg-amber-600' : 'bg-slate-600'
-                }`}
-              >
-                <span
-                  className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
-                    trailRecovery ? 'translate-x-5' : ''
-                  }`}
-                />
-              </button>
-              <span className="text-xs text-slate-400">
-                Trail Recovery{' '}
-                {trailRecovery ? <span className="text-amber-400">ON</span> : <span className="text-slate-500">OFF</span>}
-              </span>
-              <InfoTooltip text="When ON, the recovery baseline trails up with each profit milestone. Recovery risk activates when balance drops below the last locked milestone, not just the initial capital." />
-            </div>
-            {trailRecovery && (
-              <div>
-                <label className="block text-xs text-slate-400 mb-1">
-                  Trail every{' '}
-                  <span className="text-amber-400 font-bold">{trailRecoveryPct}%</span>
-                  <InfoTooltip text="Baseline locks in at compounding milestones (e.g. 10% → ×1.1, ×1.21, ×1.331…). If balance drops below the last locked milestone, recovery risk activates." />
-                </label>
-                <input
-                  type="number"
-                  value={trailRecoveryPct}
-                  min={1}
-                  max={100}
-                  step={1}
-                  onChange={(e) => setTrailRecoveryPct(Number(e.target.value) || 10)}
-                  className="w-full bg-slate-800 border border-amber-600/50 rounded-lg px-3 py-2 text-slate-100 text-sm focus:outline-none focus:border-amber-500"
-                />
+            {/* Risk % */}
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">
+                Risk per Trade:{' '}
+                <span className="text-blue-400 font-bold">{riskPct}%</span>
+                <InfoTooltip text="Fraction of capital risked per trade. Lot size is calculated so that a full SL hit costs exactly this % of the account (or of initial capital if compounding is off)." />
+              </label>
+              <input
+                type="range"
+                min={0.5}
+                max={5}
+                step={0.5}
+                value={riskPct}
+                onChange={(e) => setRiskPct(Number(e.target.value))}
+                className="w-full accent-blue-500"
+              />
+              <div className="flex justify-between text-xs text-slate-500 mt-0.5">
+                <span>0.5%</span>
+                <span>5%</span>
               </div>
+            </div>
+
+            {/* Recovery Risk */}
+            <div>
+              <label className="block text-xs text-slate-400 mb-1">
+                Recovery Risk:{' '}
+                <span className="text-blue-400 font-bold">{riskRecovery}%</span>
+                <InfoTooltip text="Reduced risk % applied when current capital falls below the initial capital. Set to 0 to disable." />
+              </label>
+              <input
+                type="range"
+                min={0}
+                max={5}
+                step={0.25}
+                value={riskRecovery}
+                onChange={(e) => {
+                  const v = Number(e.target.value);
+                  setRiskRecovery(v === 0 ? 0 : Math.max(0.25, v));
+                }}
+                className="w-full accent-blue-500"
+              />
+              <div className="flex justify-between text-xs text-slate-500 mt-0.5">
+                <span>Disabled (0%)</span>
+                <span>5%</span>
+              </div>
+            </div>
+
+            {/* Trail Recovery Baseline */}
+            {riskRecovery > 0 && (
+              <>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setTrailRecovery((t) => !t)}
+                    className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${
+                      trailRecovery ? 'bg-amber-600' : 'bg-slate-600'
+                    }`}
+                  >
+                    <span
+                      className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                        trailRecovery ? 'translate-x-5' : ''
+                      }`}
+                    />
+                  </button>
+                  <span className="text-xs text-slate-400">
+                    Trail Recovery{' '}
+                    {trailRecovery ? <span className="text-amber-400">ON</span> : <span className="text-slate-500">OFF</span>}
+                  </span>
+                  <InfoTooltip text="When ON, the recovery baseline trails up with each profit milestone. Recovery risk activates when balance drops below the last locked milestone, not just the initial capital." />
+                </div>
+                {trailRecovery && (
+                  <div>
+                    <label className="block text-xs text-slate-400 mb-1">
+                      Trail every{' '}
+                      <span className="text-amber-400 font-bold">{trailRecoveryPct}%</span>
+                      <InfoTooltip text="Baseline locks in at compounding milestones (e.g. 10% → ×1.1, ×1.21, ×1.331…). If balance drops below the last locked milestone, recovery risk activates." />
+                    </label>
+                    <input
+                      type="number"
+                      value={trailRecoveryPct}
+                      min={1}
+                      max={100}
+                      step={1}
+                      onChange={(e) => setTrailRecoveryPct(Number(e.target.value) || 10)}
+                      className="w-full bg-slate-800 border border-amber-600/50 rounded-lg px-3 py-2 text-slate-100 text-sm focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                )}
+              </>
             )}
           </>
         )}
@@ -1066,27 +1229,29 @@ export function BacktestForm({ onResult, initialParams }: Props) {
           />
         </div>
 
-        {/* Compounding */}
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => setCompound((c) => !c)}
-            className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${
-              compound ? 'bg-blue-600' : 'bg-slate-600'
-            }`}
-          >
-            <span
-              className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
-                compound ? 'translate-x-5' : ''
+        {/* Compounding — hidden in fixed-lot mode */}
+        {!fixedLotMode && (
+          <div className="flex items-center gap-3">
+            <button
+              type="button"
+              onClick={() => setCompound((c) => !c)}
+              className={`relative w-11 h-6 rounded-full transition-colors flex-shrink-0 ${
+                compound ? 'bg-blue-600' : 'bg-slate-600'
               }`}
-            />
-          </button>
-          <span className="text-xs text-slate-400">
-            Compounding{' '}
-            {compound ? <span className="text-blue-400">ON</span> : <span className="text-slate-500">OFF</span>}
-          </span>
-          <InfoTooltip text="ON: lot size recalculated from current balance each trade (risk compounds). OFF: lot size uses the fixed initial capital throughout." />
-        </div>
+            >
+              <span
+                className={`absolute top-1 left-1 w-4 h-4 bg-white rounded-full transition-transform ${
+                  compound ? 'translate-x-5' : ''
+                }`}
+              />
+            </button>
+            <span className="text-xs text-slate-400">
+              Compounding{' '}
+              {compound ? <span className="text-blue-400">ON</span> : <span className="text-slate-500">OFF</span>}
+            </span>
+            <InfoTooltip text="ON: lot size recalculated from current balance each trade (risk compounds). OFF: lot size uses the fixed initial capital throughout." />
+          </div>
+        )}
       </div>
 
       {/* ── Trade Management ───────────────────────────────────────────── */}
@@ -1229,6 +1394,8 @@ export function BacktestForm({ onResult, initialParams }: Props) {
 
           const currentPendingCancel = (stratParams['pending_cancel'] ?? 'max_bars') as string;
           const emaFilterMode = (stratParams['ema_filter_mode'] ?? 'dual') as string;
+          const slTpMode = (stratParams['sl_tp_mode'] ?? 'pips') as string;
+          const levelDetector = (stratParams['level_detector'] ?? 'rolling') as string;
 
           const isVisible = (name: string): boolean => {
             if (name.startsWith('adx_'))        return currentFilter === 'adx';
@@ -1239,7 +1406,36 @@ export function BacktestForm({ onResult, initialParams }: Props) {
             if (name.startsWith('mc_'))         return mcFilterOn;
             if (name.startsWith('ote_'))        return requireOte;
             if (name === 'ema_fast_period')     return emaFilterMode === 'dual';
-            if (name === 'max_pending_bars')    return currentPendingCancel === 'max_bars' || currentPendingCancel === 'both';
+            // level_detector gates lookback_bars vs fractal params
+            if (name === 'lookback_bars') {
+              if ('level_detector' in stratParams) return levelDetector === 'rolling';
+            }
+            if (name === 'fractal_n_before' || name === 'fractal_n_after') {
+              return levelDetector === 'fractal';
+            }
+            // sl_tp_mode gates rr_ratio, sl_mode, sl_pips, tp_pips, sl_pct, tp_pct
+            if (name === 'rr_ratio') {
+              if ('sl_tp_mode' in stratParams) return slTpMode === 'rr';
+            }
+            if (name === 'sl_mode') {
+              if ('sl_tp_mode' in stratParams) return slTpMode === 'rr';
+            }
+            if (name === 'sl_pips' || name === 'tp_pips') {
+              if ('sl_tp_mode' in stratParams) return slTpMode === 'pips';
+            }
+            if (name === 'sl_pct' || name === 'tp_pct') return slTpMode === 'pct';
+            if (name === 'pending_cancel_buffer_pips') {
+              const pc = (stratParams['pending_cancel'] ?? 'max_bars') as string;
+              return pc === 'sl_break' || pc === 'both';
+            }
+            if (name === 'max_pending_bars') {
+              // pip_breakout: show when cancel mode includes max_bars (entry_mode doesn't gate it)
+              if ('entry_mode' in stratParams) {
+                const pc = (stratParams['pending_cancel'] ?? 'max_bars') as string;
+                return pc === 'max_bars' || pc === 'both';
+              }
+              return currentPendingCancel === 'max_bars' || currentPendingCancel === 'both';
+            }
             return true;
           };
 

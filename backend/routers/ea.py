@@ -131,8 +131,60 @@ Call `CountPeriodSL(InpMagicNumber)` before placing any order. Skip if count >= 
 """
 
 
+def _risk_block_fixed_lot(params: dict, lang: str, fixed_lot: float) -> str:
+    """Risk block variant for fixed-lot mode (no risk-% calculation)."""
+    from backtest import PAIR_CONFIG
+    symbol          = params.get("symbol", "XAUUSD")
+    pair_cfg        = PAIR_CONFIG.get(symbol, PAIR_CONFIG["XAUUSD"])
+    contract_size   = pair_cfg["contract_size"]
+    initial_capital = float(params.get("initial_capital", 10000))
+    commission_per_lot_v = float(params.get("commission_per_lot", 3.5))
+    breakeven_r     = params.get("breakeven_r")
+    breakeven_sl_r  = float(params.get("breakeven_sl_r", 0.0))
+    max_sl          = params.get("max_sl_per_period")
+    sl_period       = params.get("sl_period", "none")
+
+    compute_lots_spec = (
+        f"\n### ComputeLots Helper Function\n"
+        f"Implement `double ComputeLots(double entry, double sl)` — call this before every order placement:\n"
+        f"```\n"
+        f"double ComputeLots(double entry, double sl) {{\n"
+        f"    double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);\n"
+        f"    double lots = MathFloor(InpFixedLot / step) * step;\n"
+        f"    return MathMax(SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN),\n"
+        f"                   MathMin(lots, SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX)));\n"
+        f"}}\n"
+        f"```\n"
+        f"- `InpFixedLot` is an `input double` (default {fixed_lot:g}) — the same lot size used on every trade.\n"
+        f"- `entry` and `sl` parameters are accepted for API consistency but not used for lot sizing.\n"
+        f"- Always expose `InpInitialCapital` as an `input double` (default {initial_capital:.0f}) — used only for equity tracking in the comment block.\n"
+    )
+
+    commission_note = (
+        f"- Commission: {commission_per_lot_v:.2f} USD per lot per side "
+        f"(round-trip = {fixed_lot:g} × {commission_per_lot_v:.2f} × 2 = {fixed_lot * commission_per_lot_v * 2:.2f} USD per trade). "
+        f"Expose `InpCommissionPerLot` as an `input double` (default {commission_per_lot_v:.2f}). "
+        f"In ECN/STP accounts the broker charges commission automatically — informational only.\n"
+    )
+
+    return (
+        f"## Risk Management\n"
+        f"- **Risk mode: Fixed Lot** — {fixed_lot:g} lots on every entry, regardless of SL distance.\n"
+        f"- Max open positions: {params.get('max_positions', 1)}\n"
+        f"- {symbol} contract_size = {contract_size:,} per lot\n"
+        f"- {commission_note}"
+        + compute_lots_spec
+        + _breakeven_section(breakeven_r, breakeven_sl_r)
+        + _sl_limit_section(max_sl, sl_period)
+    )
+
+
 def _risk_block(params: dict, lang: str) -> str:
     from backtest import PAIR_CONFIG
+    fixed_lot = params.get("fixed_lot")
+    if fixed_lot is not None:
+        return _risk_block_fixed_lot(params, lang, float(fixed_lot))
+
     risk_pct_pct    = float(params.get("risk_pct", 0.02)) * 100
     compound        = params.get("compound", False)
     symbol          = params.get("symbol", "XAUUSD")
@@ -430,19 +482,138 @@ def _sideways_filter_desc(params: dict) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Chart stats / comment panel section
+# ---------------------------------------------------------------------------
+
+def _chart_stats_section(strategy_name: str) -> str:
+    return f"""## Live Chart Statistics Panel
+
+Implement a real-time statistics overlay using `Comment()` so traders can monitor the EA's performance directly on the chart.
+
+### Global Stat Variables
+
+Declare these globals (initialise all to 0 / 0.0 / false):
+```
+int    g_stat_trades   = 0;    // total closed trades
+int    g_stat_wins     = 0;    // winning trades (profit > 0)
+int    g_stat_losses   = 0;    // losing trades  (profit < 0)
+int    g_stat_be       = 0;    // break-even trades (profit == 0)
+double g_stat_net_pnl  = 0.0;  // net P&L in account currency (sum of closed profits)
+double g_stat_peak_eq  = 0.0;  // peak equity reached so far
+double g_stat_max_dd   = 0.0;  // maximum drawdown % observed
+```
+
+Seed `g_stat_peak_eq = AccountInfoDouble(ACCOUNT_BALANCE)` in `OnInit` (use balance, not equity, so the panel starts correctly after restarts).
+
+### OnTradeTransaction — Update Counters on Close
+
+```
+void OnTradeTransaction(const MqlTradeTransaction& trans,
+                        const MqlTradeRequest& req,
+                        const MqlTradeResult& res)
+{{
+    if(trans.type != TRADE_TRANSACTION_DEAL_ADD) return;
+    ulong ticket = trans.deal;
+    if(!HistoryDealSelect(ticket)) return;
+    if(HistoryDealGetInteger(ticket, DEAL_MAGIC)  != InpMagicNumber) return;
+    if(HistoryDealGetString(ticket, DEAL_SYMBOL)  != _Symbol)        return;
+    if((ENUM_DEAL_ENTRY)HistoryDealGetInteger(ticket, DEAL_ENTRY) != DEAL_ENTRY_OUT) return;
+
+    double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT)
+                  + HistoryDealGetDouble(ticket, DEAL_COMMISSION)
+                  + HistoryDealGetDouble(ticket, DEAL_SWAP);
+
+    g_stat_trades++;
+    g_stat_net_pnl += profit;
+    if(profit > 0.0)       g_stat_wins++;
+    else if(profit < 0.0)  g_stat_losses++;
+    else                   g_stat_be++;
+}}
+```
+
+### UpdatePanel() — Comment Display
+
+```
+void UpdatePanel()
+{{
+    double balance  = AccountInfoDouble(ACCOUNT_BALANCE);
+    double equity   = AccountInfoDouble(ACCOUNT_EQUITY);
+
+    // Track peak equity and max drawdown
+    if(equity > g_stat_peak_eq) g_stat_peak_eq = equity;
+    double dd_pct = (g_stat_peak_eq > 0.0)
+                    ? (g_stat_peak_eq - equity) / g_stat_peak_eq * 100.0
+                    : 0.0;
+    if(dd_pct > g_stat_max_dd) g_stat_max_dd = dd_pct;
+
+    double win_rate = (g_stat_trades > 0)
+                      ? (double)g_stat_wins / g_stat_trades * 100.0
+                      : 0.0;
+
+    // Open position info
+    string pos_info = "None";
+    for(int i = 0; i < PositionsTotal(); i++)
+    {{
+        if(PositionGetSymbol(i) != _Symbol) continue;
+        if(PositionGetInteger(POSITION_MAGIC) != InpMagicNumber) continue;
+        string  dir    = (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) ? "BUY" : "SELL";
+        double  entry  = PositionGetDouble(POSITION_PRICE_OPEN);
+        double  sl_p   = PositionGetDouble(POSITION_SL);
+        double  tp_p   = PositionGetDouble(POSITION_TP);
+        double  upnl   = PositionGetDouble(POSITION_PROFIT);
+        pos_info = StringFormat("%s @ %.5f  SL:%.5f  TP:%.5f  uPnL:%.2f",
+                                dir, entry, sl_p, tp_p, upnl);
+        break;  // show first matching position
+    }}
+
+    Comment(StringFormat(
+        "=== {strategy_name} ===\\n"
+        "Symbol / TF  : %s  %s\\n"
+        "─────────────────────────\\n"
+        "Trades       : %d  (W:%d  L:%d  BE:%d)\\n"
+        "Win Rate     : %.1f%%\\n"
+        "Net P&L      : %.2f\\n"
+        "Max DD       : %.2f%%\\n"
+        "─────────────────────────\\n"
+        "Balance      : %.2f\\n"
+        "Equity       : %.2f\\n"
+        "─────────────────────────\\n"
+        "Open Pos     : %s\\n",
+        _Symbol, EnumToString(Period()),
+        g_stat_trades, g_stat_wins, g_stat_losses, g_stat_be,
+        win_rate,
+        g_stat_net_pnl,
+        g_stat_max_dd,
+        balance,
+        equity,
+        pos_info
+    ));
+}}
+```
+
+- Call `UpdatePanel()` at the **end** of every `OnTick()` execution (after all order logic).
+- Call `Comment("")` in `OnDeinit` to clear the overlay when the EA is removed.
+"""
+
+
+# ---------------------------------------------------------------------------
 # Shared helpers for prompt builders
 # ---------------------------------------------------------------------------
 
 def _risk_input_group_line(params: dict) -> str:
     """Builds the === Risk Management === input group line dynamically."""
-    risk_recovery = float(params.get("risk_recovery", 0.0))
+    fixed_lot      = params.get("fixed_lot")
+    risk_recovery  = float(params.get("risk_recovery", 0.0))
     trail_recovery = bool(params.get("trail_recovery", False))
 
-    inputs = ["initial_capital", "risk_pct", "compound"]
-    if risk_recovery > 0:
-        inputs.append("risk_recovery")
-        if trail_recovery:
-            inputs.extend(["trail_recovery", "trail_recovery_pct"])
+    if fixed_lot is not None:
+        inputs = ["initial_capital", "fixed_lot"]
+    else:
+        inputs = ["initial_capital", "risk_pct", "compound"]
+        if risk_recovery > 0:
+            inputs.append("risk_recovery")
+            if trail_recovery:
+                inputs.extend(["trail_recovery", "trail_recovery_pct"])
     inputs.extend(["max_positions", "breakeven_r", "max_sl_per_period", "sl_period"])
     return f'- `"=== Risk Management ==="` — {", ".join(inputs)}'
 
@@ -601,6 +772,10 @@ g_last_bot_used = g_last_bot;
 ---
 
 {_risk_block(params, lang)}
+
+---
+
+{_chart_stats_section("William Fractal Breakout")}
 
 ---
 
@@ -781,6 +956,10 @@ When MT5 fills the order:
 
 ---
 
+{_chart_stats_section("Momentum Candle Scalping")}
+
+---
+
 {_code_req(lang, mt_ver)}"""
 
 
@@ -798,6 +977,7 @@ def _prompt_n_structure(
     swing_n_after    = int(params.get("swing_n_after", 5))
     rr               = params.get("rr_ratio", 2.0)
     sl_mode          = params.get("sl_mode", "swing_midpoint")
+    sl_tp_mode       = params.get("sl_tp_mode", "rr")
     sessions         = params.get("sessions", "all")
     pending_cancel   = params.get("pending_cancel", "max_bars")
     max_pending_bars = int(params.get("max_pending_bars", 10))
@@ -1009,6 +1189,38 @@ SL is moved to **{be_target}**. Fires at most once per trade (`g_be_done` preven
         "signal_candle":  "low of the HL-confirmation bar for longs / high of the LH-confirmation bar for shorts",
     }.get(sl_mode, sl_mode)
 
+    # SL/TP mode: pips — fixed pip distances override swing-based SL
+    if sl_tp_mode == "pips":
+        from backtest import PAIR_CONFIG
+        _symbol   = params.get("symbol", "XAUUSD")
+        _pip_mult = PAIR_CONFIG.get(_symbol, PAIR_CONFIG["XAUUSD"])["pip_mult"]
+        _sl_pips  = float(params.get("sl_pips", 200.0))
+        _tp_pips  = float(params.get("tp_pips", 400.0))
+        _step9_sl_tp = f"""**SL/TP mode: pips** — `sl_mode` and `rr_ratio` are ignored.
+Expose `InpPipMult` as `input double` (default **{_pip_mult:g}** for {_symbol}).
+
+```
+double sl_d = InpSlPips / InpPipMult;   // default {_sl_pips:g} pips → {_sl_pips / _pip_mult:g} price units
+double tp_d = InpTpPips / InpPipMult;   // default {_tp_pips:g} pips → {_tp_pips / _pip_mult:g} price units
+```
+
+Long:  `sl = stop_price - sl_d`,  `tp = stop_price + tp_d`
+Short: `sl = stop_price + sl_d`,  `tp = stop_price - tp_d`"""
+    else:
+        _step9_sl_tp = f"""**SL/TP mode: RR** — SL anchored to swing structure, TP = `stop_price ± {rr} × sl_dist`.
+
+SL mode: **{sl_mode}** — {sl_mode_desc}.
+
+BUY STOP:
+  `sl = {sl_long_formula}`
+  `sl_dist = stop_price - sl`
+  `tp = stop_price + {rr} * sl_dist`
+
+SELL STOP:
+  `sl = {sl_short_formula}`
+  `sl_dist = sl - stop_price`
+  `tp = stop_price - {rr} * sl_dist`"""
+
     return f"""## Strategy: N Structure Breakout
 ## Platform: MetaTrader {mt_ver} ({lang})
 ## Instrument: {params.get('symbol', 'XAUUSD')}
@@ -1215,17 +1427,15 @@ Before placing any order, verify the period SL count is within limit (see Risk M
 ### Step 9 — Order placement (pending stop orders)
 
 SL and TP are anchored to the **stop price** (the breakout level), not the current bar close.
-This matches the Python backtest where `dist = entry_stop − sl_price` and `tp = entry_stop + rr × dist`.
+
+{_step9_sl_tp}
 
 **BUY STOP at g_last_sh:**
 ```
 double stop_price = g_last_sh;
-double sl         = {sl_long_formula};
-double sl_dist    = stop_price - sl;            // distance from breakout level to SL
-// Guard: sl_dist > 0
-double tp         = stop_price + {rr} * sl_dist;
+// Compute sl and tp per SL/TP mode described above
 double ask        = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-// Guard: stop_price > ask (stop must be above current price)
+// Guard: sl_dist > 0, stop_price > ask (stop must be above current price)
 double lots       = ComputeLots(stop_price, sl);
 trade.BuyStop(lots, stop_price, _Symbol, sl, tp, ORDER_TIME_GTC, 0, "NS_BUY_STOP");
 g_pending_buy_ticket  = trade.ResultOrder();{_store_buy_cancel}{_store_buy_bars}
@@ -1235,12 +1445,9 @@ g_hl = 0.0;                                     // reset — need new structure 
 **SELL STOP at g_last_sl:**
 ```
 double stop_price = g_last_sl;
-double sl         = {sl_short_formula};
-double sl_dist    = sl - stop_price;            // distance from breakout level to SL
-// Guard: sl_dist > 0
-double tp         = stop_price - {rr} * sl_dist;
+// Compute sl and tp per SL/TP mode described above
 double bid        = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-// Guard: stop_price < bid (stop must be below current price)
+// Guard: sl_dist > 0, stop_price < bid (stop must be below current price)
 double lots       = ComputeLots(stop_price, sl);
 trade.SellStop(lots, stop_price, _Symbol, sl, tp, ORDER_TIME_GTC, 0, "NS_SELL_STOP");
 g_pending_sell_ticket = trade.ResultOrder();{_store_sell_cancel}{_store_sell_bars}
@@ -1256,6 +1463,10 @@ still live (use `OrderSelect` or iterate `OrdersTotal()`). If an order no longer
 ---
 
 {_risk_block(params, lang)}
+
+---
+
+{_chart_stats_section("N Structure Breakout")}
 
 ---
 
@@ -1474,7 +1685,509 @@ If all true:
 
 ---
 
+{_chart_stats_section("Fair Value Gap")}
+
+---
+
 ## Code Requirements
+{_code_req(lang, mt_ver)}"""
+
+
+# ---------------------------------------------------------------------------
+# Pip Breakout prompt
+# ---------------------------------------------------------------------------
+
+_TF_CONST: dict[str, str] = {
+    "M1": "PERIOD_M1", "M5": "PERIOD_M5", "M15": "PERIOD_M15",
+    "H1": "PERIOD_H1", "H4": "PERIOD_H4", "D1": "PERIOD_D1",
+}
+
+
+def _ema_init_block(params: dict, slow_handle: str = "g_ema_handle", fast_handle: str = "g_fast_ema_handle") -> tuple[str, str, str]:
+    """
+    Returns (global_decls, oninit_code, ontick_copy_code) for the EMA filter.
+    Handles none / single / dual modes and same vs. HTF timeframes.
+    """
+    ema_p      = int(params.get("ema_period", 200))
+    ema_fast_p = int(params.get("ema_fast_period", 50))
+    ema_tf     = params.get("ema_timeframe", "same")
+    mode       = params.get("ema_filter_mode", "single")
+
+    tf_const = f"PERIOD_CURRENT" if ema_tf == "same" else _TF_CONST.get(ema_tf, f"PERIOD_{ema_tf}")
+    tf_label = "chart timeframe" if ema_tf == "same" else f"{ema_tf} timeframe (higher-timeframe filter)"
+
+    if mode == "none":
+        return (
+            "",
+            "// EMA filter: none — no indicator handle needed",
+            "// EMA filter: none\nbool ema_ok_long = true;\nbool ema_ok_short = true;",
+        )
+
+    if mode == "dual":
+        g_decls = (
+            f"int {slow_handle};   // EMA({ema_p}) on {tf_label}\n"
+            f"int {fast_handle};   // EMA({ema_fast_p}) on {tf_label}\n"
+        )
+        init_code = (
+            f"{slow_handle} = iMA(_Symbol, {tf_const}, {ema_p}, 0, MODE_EMA, PRICE_CLOSE);\n"
+            f"if({slow_handle} == INVALID_HANDLE) return INIT_FAILED;\n"
+            f"{fast_handle} = iMA(_Symbol, {tf_const}, {ema_fast_p}, 0, MODE_EMA, PRICE_CLOSE);\n"
+            f"if({fast_handle} == INVALID_HANDLE) return INIT_FAILED;"
+        )
+        copy_code = (
+            f"double slow_ema_buf[2], fast_ema_buf[2];\n"
+            f"ArraySetAsSeries(slow_ema_buf, true);\n"
+            f"ArraySetAsSeries(fast_ema_buf, true);\n"
+            f"if(CopyBuffer({slow_handle}, 0, 0, 2, slow_ema_buf) < 2) return;\n"
+            f"if(CopyBuffer({fast_handle}, 0, 0, 2, fast_ema_buf) < 2) return;\n"
+            f"double slow_ema1 = slow_ema_buf[1];   // EMA({ema_p}) at bar[1]\n"
+            f"double fast_ema1 = fast_ema_buf[1];   // EMA({ema_fast_p}) at bar[1]\n"
+            f"// Dual EMA filter: fast > slow → uptrend (long allowed); fast < slow → downtrend (short allowed)\n"
+            f"bool ema_ok_long  = (fast_ema1 > slow_ema1);\n"
+            f"bool ema_ok_short = (fast_ema1 < slow_ema1);"
+        )
+    else:  # single
+        g_decls = f"int {slow_handle};   // EMA({ema_p}) on {tf_label}\n"
+        init_code = (
+            f"{slow_handle} = iMA(_Symbol, {tf_const}, {ema_p}, 0, MODE_EMA, PRICE_CLOSE);\n"
+            f"if({slow_handle} == INVALID_HANDLE) return INIT_FAILED;"
+        )
+        copy_code = (
+            f"double ema_buf[2];\n"
+            f"ArraySetAsSeries(ema_buf, true);\n"
+            f"if(CopyBuffer({slow_handle}, 0, 0, 2, ema_buf) < 2) return;\n"
+            f"double ema1 = ema_buf[1];   // EMA({ema_p}) at bar[1] on {tf_label}\n"
+            f"// Single EMA filter: close[1] vs EMA\n"
+            f"bool ema_ok_long  = (close1 > ema1);\n"
+            f"bool ema_ok_short = (close1 < ema1);"
+        )
+
+    return g_decls, init_code, copy_code
+
+
+def _prompt_pip_breakout(
+    params: dict, lang: str, mt_ver: str,
+    perf: str, param_lines_str: str,
+) -> str:
+    from backtest import PAIR_CONFIG
+
+    symbol          = params.get("symbol", "XAUUSD")
+    pip_mult        = PAIR_CONFIG.get(symbol, PAIR_CONFIG["XAUUSD"])["pip_mult"]
+
+    level_detector  = params.get("level_detector", "rolling")
+    lookback        = int(params.get("lookback_bars", 20))
+    frac_n_before   = int(params.get("fractal_n_before", 5))
+    frac_n_after    = int(params.get("fractal_n_after", 5))
+
+    sl_tp_mode      = params.get("sl_tp_mode", "pips")
+    sl_pips         = float(params.get("sl_pips", 200.0))
+    tp_pips         = float(params.get("tp_pips", 400.0))
+    sl_pct          = float(params.get("sl_pct", 1.0))
+    tp_pct          = float(params.get("tp_pct", 2.0))
+
+    entry_mode      = params.get("entry_mode", "close")
+    entry_offset    = float(params.get("entry_offset_pips", 0.0))
+    pending_cancel  = params.get("pending_cancel", "max_bars")
+    max_pending_bars = int(params.get("max_pending_bars", 10))
+    buf_pips        = float(params.get("pending_cancel_buffer_pips", 0.0))
+
+    ema_mode        = params.get("ema_filter_mode", "single")
+    ema_tf          = params.get("ema_timeframe", "same")
+    sessions        = params.get("sessions", "all")
+
+    session_sec     = _session_filter_section(sessions)
+    filter_desc     = _sideways_filter_desc(params)
+    risk_mgmt_line  = _risk_input_group_line(params)
+
+    ema_g_decls, ema_init_code, ema_copy_code = _ema_init_block(params)
+
+    # Derived flags
+    has_stop_order  = (entry_mode == "touch") or (entry_offset > 0)
+    use_max_bars    = has_stop_order and pending_cancel in ("max_bars", "both")
+    use_sl_break    = has_stop_order and pending_cancel in ("sl_break", "both")
+
+    ema_filter_label = {
+        "none":   "None — signals in both directions regardless of EMA",
+        "single": f"Single EMA — longs only when close[1] > EMA, shorts when close[1] < EMA",
+        "dual":   f"Dual EMA — longs when fast EMA > slow EMA, shorts when fast EMA < slow EMA",
+    }.get(ema_mode, ema_mode)
+    tf_note = "" if ema_tf == "same" else f" (sourced from **{ema_tf}** timeframe)"
+
+    # ── Level detection section ───────────────────────────────────────────────
+    if level_detector == "fractal":
+        level_det_input_lines = (
+            f"- `\"=== Level Detection ===\"` — level_detector, fractal_n_before, fractal_n_after"
+        )
+        level_det_globals = (
+            f"double   g_frac_high = 0.0;   // most-recently confirmed fractal high (carry-forward)\n"
+            f"double   g_frac_low  = 0.0;   // most-recently confirmed fractal low  (carry-forward)\n"
+        )
+        level_det_init = (
+            f"// Fractal level detection: no indicator handle needed — computed from price arrays"
+        )
+        level_det_step = f"""### Step 4 — Fractal level detection
+
+At each new bar check bar index `cand = InpFractalNAfter + 1` (so the right side = bars 1..cand-1 are confirmed closed):
+
+**Fractal high at `cand`:**
+```
+bool frac_high_ok = true;
+for(int k = 1; k <= InpFractalNAfter; k++)  // right (more-recent) side
+    if(highs[cand] <= highs[cand - k]) {{ frac_high_ok = false; break; }}
+for(int k = 1; k <= InpFractalNBefore; k++) // left  (older) side
+    if(highs[cand] <= highs[cand + k]) {{ frac_high_ok = false; break; }}
+if(frac_high_ok) g_frac_high = highs[cand];
+```
+
+**Fractal low at `cand`:**
+```
+bool frac_low_ok = true;
+for(int k = 1; k <= InpFractalNAfter; k++)
+    if(lows[cand] >= lows[cand - k]) {{ frac_low_ok = false; break; }}
+for(int k = 1; k <= InpFractalNBefore; k++)
+    if(lows[cand] >= lows[cand + k]) {{ frac_low_ok = false; break; }}
+if(frac_low_ok) g_frac_low = lows[cand];
+```
+
+Use `rh = g_frac_high` and `rl = g_frac_low` as the current resistance/support levels.
+Carry-forward: `g_frac_high`/`g_frac_low` are only updated when a new fractal is confirmed; otherwise they hold their last value.
+
+Required buffer size: `InpFractalNAfter + 1 + InpFractalNBefore + 1` bars.
+```
+int   cand        = InpFractalNAfter + 1;
+int   total_frac  = InpFractalNAfter + 1 + InpFractalNBefore + 1;
+if(Bars(_Symbol, PERIOD_CURRENT) < total_frac + 5) return;
+double highs[], lows[], closes[];
+ArraySetAsSeries(highs,  true);
+ArraySetAsSeries(lows,   true);
+ArraySetAsSeries(closes, true);
+if(CopyHigh (_Symbol, PERIOD_CURRENT, 0, total_frac, highs)  < total_frac) return;
+if(CopyLow  (_Symbol, PERIOD_CURRENT, 0, total_frac, lows)   < total_frac) return;
+if(CopyClose(_Symbol, PERIOD_CURRENT, 0, total_frac, closes) < total_frac) return;
+double close1 = closes[1];
+double rh = g_frac_high;
+double rl = g_frac_low;
+```"""
+    else:
+        level_det_input_lines = (
+            f"- `\"=== Level Detection ===\"` — level_detector, lookback_bars"
+        )
+        level_det_globals = ""
+        level_det_init = (
+            f"// Rolling Donchian level detection: no indicator handle needed"
+        )
+        level_det_step = f"""### Step 4 — Rolling Donchian level detection
+
+Window = bars[2..{lookback + 1}] (the {lookback} bars before bar[1], excluding bar[1] — no lookahead):
+
+```
+int   copy_count = InpLookbackBars + 2;
+double highs[], lows[], closes[];
+ArraySetAsSeries(highs,  true);
+ArraySetAsSeries(lows,   true);
+ArraySetAsSeries(closes, true);
+if(Bars(_Symbol, PERIOD_CURRENT) < copy_count + 2) return;
+if(CopyHigh (_Symbol, PERIOD_CURRENT, 0, copy_count, highs)  < copy_count) return;
+if(CopyLow  (_Symbol, PERIOD_CURRENT, 0, copy_count, lows)   < copy_count) return;
+if(CopyClose(_Symbol, PERIOD_CURRENT, 0, copy_count, closes) < copy_count) return;
+double close1 = closes[1];
+
+double rh = highs[2];
+double rl = lows[2];
+for(int k = 3; k <= InpLookbackBars + 1; k++) {{
+    if(highs[k] > rh) rh = highs[k];
+    if(lows[k]  < rl) rl = lows[k];
+}}
+```"""
+
+    # ── SL/TP computation section ─────────────────────────────────────────────
+    if sl_tp_mode == "pct":
+        sl_tp_input_group = "sl_tp_mode, sl_pct, tp_pct"
+        sl_tp_desc = f"""**SL/TP mode: pct** — distances are a percentage of the anchor price.
+```
+double sl_dist = anchor * InpSlPct / 100.0;   // default {sl_pct:g}%
+double tp_dist = anchor * InpTpPct / 100.0;   // default {tp_pct:g}%
+```"""
+    else:
+        sl_tp_input_group = f"sl_tp_mode, sl_pips, tp_pips, pip_mult"
+        sl_tp_desc = f"""**SL/TP mode: pips** — fixed pip distances converted to price units.
+Expose `InpPipMult` as `input double` (default **{pip_mult:g}** for {symbol}).
+```
+double sl_dist = InpSlPips / InpPipMult;   // default {sl_pips:g} pips
+double tp_dist = InpTpPips / InpPipMult;   // default {tp_pips:g} pips
+```"""
+
+    # ── Entry mode section ────────────────────────────────────────────────────
+    offset_dist_line = f"double offset_dist = InpEntryOffsetPips / InpPipMult;   // {entry_offset:g} pips offset"
+
+    if entry_mode == "touch":
+        entry_desc = f"""**Entry mode: touch** — place a stop order at the level ± offset immediately when a new level is detected, without waiting for a bar close.
+- Long:  BuyStop  at `rh + offset_dist`
+- Short: SellStop at `rl - offset_dist`
+- Signal fires purely from `rh != g_last_used_high` (no close-above condition)."""
+        close_cond_long  = "rh > 0.0 && rh != g_last_used_high"
+        close_cond_short = "rl > 0.0 && rl != g_last_used_low"
+        anchor_long  = "rh + offset_dist"
+        anchor_short = "rl - offset_dist"
+        order_type_long  = "BuyStop"
+        order_type_short = "SellStop"
+    elif entry_offset > 0:
+        entry_desc = f"""**Entry mode: close with offset** — signal fires when close[1] crosses above/below the level, then places a stop order offset pips beyond the level.
+- Long:  BuyStop  at `rh + offset_dist` when `close[1] > rh`
+- Short: SellStop at `rl - offset_dist` when `close[1] < rl`"""
+        close_cond_long  = "close1 > rh && rh != g_last_used_high"
+        close_cond_short = "close1 < rl && rl != g_last_used_low"
+        anchor_long  = "rh + offset_dist"
+        anchor_short = "rl - offset_dist"
+        order_type_long  = "BuyStop"
+        order_type_short = "SellStop"
+    else:
+        entry_desc = f"""**Entry mode: close (market)** — signal fires when close[1] closes above/below the level; entry is a market order at the next bar's Ask/Bid.
+- Long:  market Buy  when `close[1] > rh && rh != g_last_used_high`
+- Short: market Sell when `close[1] < rl && rl != g_last_used_low`"""
+        close_cond_long  = "close1 > rh && rh != g_last_used_high"
+        close_cond_short = "close1 < rl && rl != g_last_used_low"
+        anchor_long  = "SymbolInfoDouble(_Symbol, SYMBOL_ASK)"
+        anchor_short = "SymbolInfoDouble(_Symbol, SYMBOL_BID)"
+        order_type_long  = "Buy (market)"
+        order_type_short = "Sell (market)"
+
+    # ── Pending cancel section ────────────────────────────────────────────────
+    if not has_stop_order:
+        pending_input_lines = ""
+        pending_globals     = ""
+        pending_step        = "*(Not applicable — entry is a market order, no pending orders.)*"
+    else:
+        cancel_inputs = ["entry_offset_pips", "pending_cancel"]
+        if use_max_bars:
+            cancel_inputs.append("max_pending_bars")
+        if use_sl_break:
+            cancel_inputs.append("pending_cancel_buffer_pips")
+        pending_input_lines = f"- `\"=== Entry ===\"` — entry_mode, {', '.join(cancel_inputs)}"
+
+        _pend_globals = (
+            "ulong    g_pending_long_ticket  = 0;   // ticket of active long stop order\n"
+            "ulong    g_pending_short_ticket = 0;   // ticket of active short stop order\n"
+        )
+        if use_max_bars:
+            _pend_globals += (
+                "int      g_pending_long_bars    = 0;   // bars elapsed since long stop was placed\n"
+                "int      g_pending_short_bars   = 0;   // bars elapsed since short stop was placed\n"
+            )
+        if use_sl_break:
+            _pend_globals += (
+                "double   g_pending_long_sl      = 0.0; // SL of the long stop order (for cancel check)\n"
+                "double   g_pending_short_sl     = 0.0; // SL of the short stop order (for cancel check)\n"
+            )
+        pending_globals = _pend_globals
+
+        cancel_mode_parts = []
+        if use_sl_break:
+            cancel_mode_parts.append(f"**SL-break**: cancel long if `Bid <= g_pending_long_sl - buf_dist`; cancel short if `Ask >= g_pending_short_sl + buf_dist`")
+        if use_max_bars:
+            cancel_mode_parts.append(f"**Max bars**: cancel after `{max_pending_bars}` bars without fill")
+
+        buf_line = f"\ndouble buf_dist = InpPendingCancelBufferPips / InpPipMult;  // {buf_pips:g} pips" if use_sl_break else ""
+
+        pending_step = f"""### Step 2 — Manage pending stop orders
+
+Cancel mode: **{pending_cancel}** — {' + '.join(cancel_mode_parts) if cancel_mode_parts else 'none'}.
+{buf_line}
+
+**Manage long stop** (if `g_pending_long_ticket > 0`):
+```
+if(!OrderSelect(g_pending_long_ticket))
+{{
+    // Order was filled or externally cancelled — clear state
+    g_pending_long_ticket = 0;
+{"    g_pending_long_bars = 0;" if use_max_bars else ""}
+{"    g_pending_long_sl = 0.0;" if use_sl_break else ""}
+}}
+else  // still pending
+{{
+{"    g_pending_long_bars++;" if use_max_bars else ""}
+{"    // SL-break cancel: price moved against the setup" if use_sl_break else ""}
+{"    if(g_pending_long_sl > 0.0 && SymbolInfoDouble(_Symbol, SYMBOL_BID) <= g_pending_long_sl - buf_dist)" if use_sl_break else ""}
+{"    {" if use_sl_break else ""}
+{"        trade.OrderDelete(g_pending_long_ticket);" if use_sl_break else ""}
+{"        g_pending_long_ticket = 0;" if use_sl_break else ""}
+{"        g_pending_long_sl = 0.0;" if use_sl_break else ""}
+{"        g_pending_long_bars = 0;  return;" if (use_sl_break and use_max_bars) else ("        return;" if use_sl_break else "")}
+{"    }" if use_sl_break else ""}
+{"    // Max-bars expiry" if use_max_bars else ""}
+{"    " + ("else " if use_sl_break else "") + "if(g_pending_long_bars >= InpMaxPendingBars)" if use_max_bars else ""}
+{"    {" if use_max_bars else ""}
+{"        trade.OrderDelete(g_pending_long_ticket);" if use_max_bars else ""}
+{"        g_pending_long_ticket = 0;" if use_max_bars else ""}
+{"        g_pending_long_bars = 0;" if use_max_bars else ""}
+{"        g_pending_long_sl = 0.0;  return;" if (use_max_bars and use_sl_break) else ("        return;" if use_max_bars else "")}
+{"    }" if use_max_bars else ""}
+    else return;   // order still valid — skip new signal search this bar
+}}
+```
+
+**Manage short stop** (if `g_pending_short_ticket > 0`): same pattern, using `g_pending_short_ticket`, `g_pending_short_bars`, `g_pending_short_sl`; cancel trigger: `Ask >= g_pending_short_sl + buf_dist`."""
+
+    # ── Input groups ──────────────────────────────────────────────────────────
+    level_group = level_det_input_lines
+    if sl_tp_mode == "pct":
+        sltp_group = f"- `\"=== SL / TP ===\"` — sl_tp_mode, sl_pct, tp_pct"
+    else:
+        sltp_group = f"- `\"=== SL / TP ===\"` — sl_tp_mode, sl_pips, tp_pips, pip_mult"
+
+    if has_stop_order:
+        entry_group = pending_input_lines
+    else:
+        entry_group = f"- `\"=== Entry ===\"` — entry_mode, entry_offset_pips"
+
+    ema_dual_extra = ", ema_fast_period" if ema_mode == "dual" else ""
+
+    return f"""## Strategy: Pip Breakout
+## Platform: MetaTrader {mt_ver} ({lang})
+## Instrument: {symbol}
+## Timeframe: {params.get('timeframe', 'H1')}
+
+### Backtest Performance
+{perf}
+
+### Parameters
+{param_lines_str}
+
+---
+
+## Strategy Overview
+
+The Pip Breakout EA detects a resistance/support level (rolling Donchian channel or confirmed fractal)
+and enters when price breaks above (long) or below (short) that level.
+Entry is either a market order (close mode, no offset) or a stop order (touch mode or offset > 0).
+SL/TP are fixed distances from the anchor price, in pips or % of price.
+
+**Level detector**: {level_detector}
+**SL/TP mode**: {sl_tp_mode}
+**Entry mode**: {entry_mode}{f" (offset {entry_offset:g} pips)" if entry_offset > 0 else ""}
+**EMA Trend Filter**: {ema_filter_label}{tf_note}
+
+---
+
+## Input Groups
+
+Group all `input` variables using `input group "..."` (MQL5) or string separator inputs (MQL4):
+{level_group}
+{sltp_group}
+{entry_group}
+- `"=== EMA Trend Filter ==="` — ema_filter_mode, ema_period{ema_dual_extra}, ema_timeframe
+- `"=== Session Filter ==="` — sessions (display label)
+- `"=== Sideways Filter ==="` — sideways_filter and its sub-parameters
+{risk_mgmt_line}
+- `"=== Execution ==="` — magic_number, commission_per_lot
+
+---
+
+## Global State
+
+```
+datetime g_last_bar_time     = 0;      // new-bar guard
+double   g_last_used_high    = 0.0;    // level that last triggered a long — prevents re-entry on same level
+double   g_last_used_low     = 0.0;    // level that last triggered a short
+{level_det_globals}{pending_globals}{ema_g_decls}```
+
+---
+
+## OnInit
+
+```
+g_stat_peak_eq = AccountInfoDouble(ACCOUNT_BALANCE);
+{level_det_init}
+{ema_init_code}
+```
+
+---
+
+## OnTick Logic
+
+### Step 1 — New-bar guard
+Compare `iTime(_Symbol, PERIOD_CURRENT, 0)` with `g_last_bar_time`. If same bar → call `UpdatePanel()` and return.
+Update `g_last_bar_time` and proceed.
+
+{pending_step}
+
+### Step 3 — EMA trend filter
+```
+{ema_copy_code}
+```
+
+### Step 4A — Sideways filter
+{filter_desc}
+
+{level_det_step}
+
+### Step 5 — Session filter
+{session_sec}
+
+### Step 6 — Skip if at position limit
+If open positions for this symbol + magic number ≥ `InpMaxPositions` → return.
+
+### Step 7 — Compute SL/TP distances
+
+{sl_tp_desc}
+
+### Step 8 — Evaluate signals with level deduplication
+
+{entry_desc}
+
+{offset_dist_line}
+
+**Long signal** — conditions: `{close_cond_long}` AND `ema_ok_long` AND `trend_ok_long`
+- anchor = `{anchor_long}`
+- `sl = NormalizeDouble(anchor - sl_dist, _Digits)`
+- `tp = NormalizeDouble(anchor + tp_dist, _Digits)`
+
+**Short signal** — conditions: `{close_cond_short}` AND `ema_ok_short` AND `trend_ok_short`
+- anchor = `{anchor_short}`
+- `sl = NormalizeDouble(anchor + sl_dist, _Digits)`
+- `tp = NormalizeDouble(anchor - tp_dist, _Digits)`
+
+If both long and short conditions are true simultaneously (rare), take neither — return.
+
+### Step 9 — Period SL limit check
+Before placing any order, verify the period SL count is within limit (see Risk Management).
+
+### Step 10 — Order placement
+
+**Long** (`{order_type_long}`):
+```
+double lots = ComputeLots(anchor, sl);
+// Guards: sl_dist > 0, anchor > sl, tp > anchor
+{"trade.BuyStop(lots, anchor, _Symbol, sl, tp, ORDER_TIME_GTC, 0, \"PB_LONG_STOP\");" if has_stop_order else "double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);"}
+{"g_pending_long_ticket = trade.ResultOrder();" if has_stop_order else "trade.Buy(lots, _Symbol, ask, sl, tp, \"PB_LONG\");"}
+{"g_pending_long_bars = 0;" if use_max_bars else ""}
+{"g_pending_long_sl = sl;" if use_sl_break else ""}
+g_last_used_high = rh;   // mark level as used — prevents duplicate signal
+```
+
+**Short** (`{order_type_short}`):
+```
+double lots = ComputeLots(anchor, sl);
+// Guards: sl_dist > 0, anchor < sl, tp < anchor
+{"trade.SellStop(lots, anchor, _Symbol, sl, tp, ORDER_TIME_GTC, 0, \"PB_SHORT_STOP\");" if has_stop_order else "double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);"}
+{"g_pending_short_ticket = trade.ResultOrder();" if has_stop_order else "trade.Sell(lots, _Symbol, bid, sl, tp, \"PB_SHORT\");"}
+{"g_pending_short_bars = 0;" if use_max_bars else ""}
+{"g_pending_short_sl = sl;" if use_sl_break else ""}
+g_last_used_low = rl;    // mark level as used — prevents duplicate signal
+```
+
+At the **end** of every `OnTick()` execution: call `UpdatePanel()`.
+
+---
+
+{_risk_block(params, lang)}
+
+---
+
+{_chart_stats_section("Pip Breakout")}
+
+---
+
 {_code_req(lang, mt_ver)}"""
 
 
@@ -1495,6 +2208,8 @@ def _build_prompt(strategy: str, params: dict, results: dict, platform: str) -> 
         return _prompt_n_structure(params, lang, mt_ver, perf, param_lines_str)
     elif strategy == "fair_value_gap":
         return _prompt_fair_value_gap(params, lang, mt_ver, perf, param_lines_str)
+    elif strategy == "pip_breakout":
+        return _prompt_pip_breakout(params, lang, mt_ver, perf, param_lines_str)
     else:
         return _prompt_william_fractals(params, lang, mt_ver, perf, param_lines_str)
 

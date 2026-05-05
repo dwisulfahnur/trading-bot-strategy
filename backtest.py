@@ -41,8 +41,9 @@ VALID_TIMEFRAMES = ["M1", "M5", "M15", "H1", "H4"]
 PAIR_CONFIG: dict[str, dict] = {
     # Metals
     "XAUUSD": {"contract_size": 100,     "pip_mult": 10.0},
-    # Crypto (USD-quoted, 1 lot = 1 BTC)
+    # Crypto (USD-quoted, 1 lot = 1 coin)
     "BTCUSD": {"contract_size": 1,       "pip_mult": 1.0},
+    "ETHUSD": {"contract_size": 1,       "pip_mult": 1.0},
     # Indices (USD-quoted, 1 lot = 1 contract, 1 point = $1)
     "USTEC":  {"contract_size": 1,       "pip_mult": 1.0},
     # USD-quoted forex
@@ -587,7 +588,7 @@ def simulate(
 # Metrics
 # ---------------------------------------------------------------------------
 
-def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float, risk_recovery: float = 0.0, compound: bool = True, commission_per_lot: float = 3.5, symbol: str = "XAUUSD", trail_recovery: bool = False, trail_recovery_pct: float = 10.0) -> dict:
+def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float, risk_recovery: float = 0.0, compound: bool = True, commission_per_lot: float = 3.5, symbol: str = "XAUUSD", trail_recovery: bool = False, trail_recovery_pct: float = 10.0, fixed_lot: float | None = None) -> dict:
     if not trades:
         return {}
 
@@ -614,8 +615,11 @@ def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float
         if symbol not in PAIR_CONFIG:
             raise ValueError(f"Symbol '{symbol}' not found in PAIR_CONFIG. Add it to backtest.py before running.")
         contract_size  = PAIR_CONFIG[symbol]["contract_size"]
-        lot_size       = round(risk_at_entry / t._initial_sl_dist / contract_size, 2) if t._initial_sl_dist > 0 else 0.0
-        lot_size       = max(0.01, lot_size)  # enforce broker minimum lot
+        if fixed_lot is not None:
+            lot_size   = max(0.01, round(fixed_lot, 2))
+        else:
+            lot_size   = round(risk_at_entry / t._initial_sl_dist / contract_size, 2) if t._initial_sl_dist > 0 else 0.0
+            lot_size   = max(0.01, lot_size)  # enforce broker minimum lot
         actual_risk    = lot_size * t._initial_sl_dist * contract_size
         commission_usd = round(lot_size * commission_per_lot * 2, 2)  # round-trip (entry + exit)
         profit_usd     = round(actual_risk * t.pnl_r - commission_usd, 2)
@@ -715,6 +719,7 @@ def compute_metrics(trades: list[Trade], initial_capital: float, risk_pct: float
         "max_drawdown_pct":   round(max_dd, 4),
         "max_drawdown_from_initial_pct": round(max_dd_from_initial, 4),
         "risk_pct":           risk_pct,
+        "fixed_lot":          fixed_lot,
         "risk_recovery_pct":  risk_recovery,
         "trail_recovery":     trail_recovery,
         "trail_recovery_pct": trail_recovery_pct,
@@ -829,6 +834,7 @@ def save_result(
             "symbol":            symbol,
             "initial_capital":    metrics.get("initial_capital"),
             "risk_pct":           metrics.get("risk_pct"),
+            "fixed_lot":          metrics.get("fixed_lot"),
             "risk_recovery":      metrics.get("risk_recovery_pct", 0.0),
             "trail_recovery":     metrics.get("trail_recovery", False),
             "trail_recovery_pct": metrics.get("trail_recovery_pct", 10.0),
