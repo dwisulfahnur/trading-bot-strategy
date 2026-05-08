@@ -4,6 +4,7 @@ import type {
   BacktestRequest,
   BacktestResult,
   DataAvailable,
+  EAPromptResponse,
   EARequest,
   EAResponse,
   JobStatus,
@@ -55,6 +56,8 @@ export const api = {
   // EA generation
   generateEA: (req: EARequest) =>
     http.post<EAResponse>('/ea/generate', req).then((r) => r.data),
+  getEAPrompt: (req: EARequest) =>
+    http.post<EAPromptResponse>('/ea/prompt', req).then((r) => r.data),
 
   // OHLCV
   getOhlcv: (timeframe: string, years: number[], symbol: string = 'XAUUSD', dateFrom?: string, dateTo?: string) => {

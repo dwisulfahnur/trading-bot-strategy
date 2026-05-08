@@ -30,6 +30,12 @@ class EAResponse(BaseModel):
     platform: str
     filename: str
     prompt: str
+    error: str = ""
+
+
+class EAPromptResponse(BaseModel):
+    prompt: str
+    filename: str
 
 
 # ---------------------------------------------------------------------------
@@ -1896,7 +1902,7 @@ ArraySetAsSeries(closes, true);
 if(CopyHigh (_Symbol, PERIOD_CURRENT, 0, total_frac, highs)  < total_frac) return;
 if(CopyLow  (_Symbol, PERIOD_CURRENT, 0, total_frac, lows)   < total_frac) return;
 if(CopyClose(_Symbol, PERIOD_CURRENT, 0, total_frac, closes) < total_frac) return;
-double close1 = closes[1];
+close1 = closes[1];   // refresh from full-window copy (close1 declared in Step 1B)
 double rh = g_frac_high;
 double rl = g_frac_low;
 ```"""
@@ -1922,7 +1928,7 @@ if(Bars(_Symbol, PERIOD_CURRENT) < copy_count + 2) return;
 if(CopyHigh (_Symbol, PERIOD_CURRENT, 0, copy_count, highs)  < copy_count) return;
 if(CopyLow  (_Symbol, PERIOD_CURRENT, 0, copy_count, lows)   < copy_count) return;
 if(CopyClose(_Symbol, PERIOD_CURRENT, 0, copy_count, closes) < copy_count) return;
-double close1 = closes[1];
+close1 = closes[1];   // refresh from full-window copy (close1 declared in Step 1B)
 
 double rh = highs[2];
 double rl = lows[2];
@@ -2159,6 +2165,15 @@ g_stat_peak_eq = AccountInfoDouble(ACCOUNT_BALANCE);
 Compare `iTime(_Symbol, PERIOD_CURRENT, 0)` with `g_last_bar_time`. If same bar → call `UpdatePanel()` and return.
 Update `g_last_bar_time` and proceed.
 
+### Step 1B — Copy close[1] (needed by EMA filter and level detection)
+```
+double closes_pre[2];
+ArraySetAsSeries(closes_pre, true);
+if(CopyClose(_Symbol, PERIOD_CURRENT, 0, 2, closes_pre) < 2) return;
+double close1 = closes_pre[1];   // last confirmed closed bar
+```
+Declare `close1` here once. The level detection step copies a larger close array into its own `closes[]` buffer but **must NOT re-declare `close1`** — reuse this variable.
+
 {pending_step}
 
 ### Step 3 — EMA trend filter
@@ -2197,7 +2212,7 @@ If open positions for this symbol + magic number ≥ `InpMaxPositions` → retur
 - `sl = NormalizeDouble(anchor + sl_dist, _Digits)`
 - `tp = NormalizeDouble(anchor - tp_dist, _Digits)`
 
-If both long and short conditions are true simultaneously (rare), take neither — return.
+Use an **if / else-if** structure — long is checked first, short only if long did not fire. This matches the Python strategy's `if-elif` priority rule: long always takes precedence if both conditions are true simultaneously.
 
 ### Step 9 — Period SL limit check
 Before placing any order, verify the period SL count is within limit (see Risk Management).
@@ -2368,7 +2383,7 @@ def generate_ea(req: EARequest) -> EAResponse:
 
     try:
         message = client.messages.create(
-            model="claude-opus-4-6",
+            model="claude-opus-4-7",
             max_tokens=8192,
             system=(
                 "You are an expert MetaTrader developer. "
@@ -2378,17 +2393,29 @@ def generate_ea(req: EARequest) -> EAResponse:
             messages=[{"role": "user", "content": prompt}],
         )
     except anthropic.APIConnectionError as exc:
-        raise HTTPException(
-            503,
-            f"Could not reach the Anthropic API — check your network connection and try again. ({exc})",
-        ) from exc
+        return EAResponse(
+            code="",
+            platform=platform,
+            filename=_build_filename(strategy, params, platform),
+            prompt=prompt,
+            error=f"Could not reach the Anthropic API — check your network connection and try again. ({exc})",
+        )
     except anthropic.RateLimitError as exc:
-        raise HTTPException(429, f"Anthropic rate limit reached — wait a moment and retry. ({exc})") from exc
+        return EAResponse(
+            code="",
+            platform=platform,
+            filename=_build_filename(strategy, params, platform),
+            prompt=prompt,
+            error=f"Anthropic rate limit reached — wait a moment and retry. ({exc})",
+        )
     except anthropic.APIStatusError as exc:
-        raise HTTPException(
-            502,
-            f"Anthropic API returned an error (HTTP {exc.status_code}): {exc.message}",
-        ) from exc
+        return EAResponse(
+            code="",
+            platform=platform,
+            filename=_build_filename(strategy, params, platform),
+            prompt=prompt,
+            error=f"Anthropic API returned an error (HTTP {exc.status_code}): {exc.message}",
+        )
 
     code = _strip_fences(message.content[0].text)
 
@@ -2400,4 +2427,27 @@ def generate_ea(req: EARequest) -> EAResponse:
         platform=platform,
         filename=_build_filename(strategy, params, platform),
         prompt=prompt,
+    )
+
+
+@router.post("/prompt", response_model=EAPromptResponse)
+def get_ea_prompt(req: EARequest) -> EAPromptResponse:
+    platform = req.platform.upper()
+    if platform not in ("MT4", "MT5"):
+        raise HTTPException(400, "platform must be 'MT4' or 'MT5'")
+
+    path = RESULT_DIR / f"{req.result_id}.json"
+    if not path.exists():
+        raise HTTPException(404, f"Result '{req.result_id}' not found")
+
+    with open(path) as f:
+        data = json.load(f)
+
+    strategy = data.get("strategy", "")
+    params   = data.get("parameters", {})
+    results  = data.get("results", {})
+
+    return EAPromptResponse(
+        prompt=_build_prompt(strategy, params, results, platform),
+        filename=_build_filename(strategy, params, platform),
     )

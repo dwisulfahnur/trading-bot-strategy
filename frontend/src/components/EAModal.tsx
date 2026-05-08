@@ -14,8 +14,10 @@ export function EAModal({ result, onClose }: Props) {
   const [prompt, setPrompt] = useState('');
   const [filename, setFilename] = useState('');
   const [loading, setLoading] = useState(false);
+  const [loadingPrompt, setLoadingPrompt] = useState(false);
   const [error, setError] = useState('');
   const [copied, setCopied] = useState(false);
+  const [copiedPrompt, setCopiedPrompt] = useState(false);
   const [activeTab, setActiveTab] = useState<'code' | 'prompt'>('code');
 
   const generate = async () => {
@@ -27,7 +29,12 @@ export function EAModal({ result, onClose }: Props) {
       setCode(res.code);
       setPrompt(res.prompt);
       setFilename(res.filename);
-      setActiveTab('code');
+      if (res.error) {
+        setError(res.error);
+        setActiveTab('prompt');
+      } else {
+        setActiveTab('code');
+      }
     } catch (e: unknown) {
       const msg =
         (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
@@ -38,10 +45,34 @@ export function EAModal({ result, onClose }: Props) {
     }
   };
 
+  const getPrompt = async () => {
+    setLoadingPrompt(true);
+    setError('');
+    try {
+      const res = await api.getEAPrompt({ result_id: result.id, platform });
+      setPrompt(res.prompt);
+      setFilename(res.filename);
+      setActiveTab('prompt');
+    } catch (e: unknown) {
+      const msg =
+        (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail ??
+        'Failed to fetch prompt.';
+      setError(msg);
+    } finally {
+      setLoadingPrompt(false);
+    }
+  };
+
   const handleCopy = async () => {
     await navigator.clipboard.writeText(code);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
+  };
+
+  const handleCopyPrompt = async () => {
+    await navigator.clipboard.writeText(prompt);
+    setCopiedPrompt(true);
+    setTimeout(() => setCopiedPrompt(false), 2000);
   };
 
   const handleDownload = () => {
@@ -90,7 +121,7 @@ export function EAModal({ result, onClose }: Props) {
                   <button
                     key={p}
                     onClick={() => { setPlatform(p); setCode(''); setPrompt(''); setError(''); }}
-                    disabled={loading}
+                    disabled={loading || loadingPrompt}
                     className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
                       platform === p
                         ? 'bg-blue-600 text-white'
@@ -103,11 +134,11 @@ export function EAModal({ result, onClose }: Props) {
               </div>
             </div>
 
-            {/* Generate button */}
-            <div className="flex-1 flex items-end justify-start pb-0.5 mt-auto">
+            {/* Generate buttons */}
+            <div className="flex items-end gap-2 pb-0.5 mt-auto">
               <button
                 onClick={generate}
-                disabled={loading}
+                disabled={loading || loadingPrompt}
                 className="px-5 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed text-white text-sm font-medium rounded-lg transition-colors flex items-center gap-2"
               >
                 {loading ? (
@@ -124,23 +155,52 @@ export function EAModal({ result, onClose }: Props) {
                   'Generate EA'
                 )}
               </button>
+              <button
+                onClick={getPrompt}
+                disabled={loading || loadingPrompt}
+                className="px-4 py-2 border border-slate-600 hover:border-slate-400 disabled:opacity-50 disabled:cursor-not-allowed text-slate-300 hover:text-slate-100 text-sm font-medium rounded-lg transition-colors flex items-center gap-2"
+              >
+                {loadingPrompt ? (
+                  <>
+                    <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
+                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+                    </svg>
+                    Loading…
+                  </>
+                ) : (
+                  'Get Prompt'
+                )}
+              </button>
             </div>
 
-            {/* Action buttons — shown only after code is ready */}
-            {code && (
+            {/* Action buttons — shown after code or prompt is ready */}
+            {(code || prompt) && (
               <div className="flex items-end gap-2 pb-0.5 mt-auto ml-auto">
-                <button
-                  onClick={handleCopy}
-                  className="px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm rounded-lg transition-colors"
-                >
-                  {copied ? 'Copied!' : 'Copy'}
-                </button>
-                <button
-                  onClick={handleDownload}
-                  className="px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm rounded-lg transition-colors"
-                >
-                  Download {platform === 'MT4' ? '.mq4' : '.mq5'}
-                </button>
+                {prompt && (
+                  <button
+                    onClick={handleCopyPrompt}
+                    className="px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm rounded-lg transition-colors"
+                  >
+                    {copiedPrompt ? 'Copied!' : 'Copy Prompt'}
+                  </button>
+                )}
+                {code && (
+                  <>
+                    <button
+                      onClick={handleCopy}
+                      className="px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm rounded-lg transition-colors"
+                    >
+                      {copied ? 'Copied!' : 'Copy Code'}
+                    </button>
+                    <button
+                      onClick={handleDownload}
+                      className="px-3 py-2 bg-slate-700 hover:bg-slate-600 text-slate-200 text-sm rounded-lg transition-colors"
+                    >
+                      Download {platform === 'MT4' ? '.mq4' : '.mq5'}
+                    </button>
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -148,7 +208,7 @@ export function EAModal({ result, onClose }: Props) {
 
         {/* Body */}
         <div className="flex-1 overflow-hidden flex flex-col">
-          {!code && !loading && !error && (
+          {!code && !prompt && !loading && !loadingPrompt && !error && (
             <div className="flex-1 flex flex-col items-center justify-center gap-3 text-slate-600 p-8">
               <svg className="w-12 h-12 text-slate-700" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5}
@@ -157,26 +217,33 @@ export function EAModal({ result, onClose }: Props) {
               <div className="text-center">
                 <p className="text-slate-500 font-medium">Ready to generate</p>
                 <p className="text-sm mt-1">
-                  Select a platform and click <span className="text-slate-400">Generate EA</span> to create {platform} code.
+                  Click <span className="text-slate-400">Generate EA</span> to create {platform} code via Claude,
+                  or <span className="text-slate-400">Get Prompt</span> to copy the prompt and run it manually.
                 </p>
               </div>
             </div>
           )}
 
-          {loading && (
+          {(loading || loadingPrompt) && (
             <div className="flex-1 flex flex-col items-center justify-center gap-4 text-slate-400 p-8">
               <svg className="w-10 h-10 animate-spin text-blue-500" fill="none" viewBox="0 0 24 24">
                 <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                 <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
               </svg>
               <div className="text-center">
-                <p className="text-slate-300 font-medium">Generating {platform} Expert Advisor…</p>
-                <p className="text-sm text-slate-500 mt-1">Claude AI is writing your EA. This may take 30–60 seconds.</p>
+                {loading ? (
+                  <>
+                    <p className="text-slate-300 font-medium">Generating {platform} Expert Advisor…</p>
+                    <p className="text-sm text-slate-500 mt-1">Claude AI is writing your EA. This may take 30–60 seconds.</p>
+                  </>
+                ) : (
+                  <p className="text-slate-300 font-medium">Building prompt…</p>
+                )}
               </div>
             </div>
           )}
 
-          {error && !loading && (
+          {error && !loading && !loadingPrompt && !prompt && (
             <div className="flex-1 flex items-center justify-center p-8">
               <div className="bg-red-950/40 border border-red-800/50 rounded-xl p-6 max-w-lg text-center">
                 <p className="text-red-400 font-medium mb-2">Generation failed</p>
@@ -185,8 +252,14 @@ export function EAModal({ result, onClose }: Props) {
             </div>
           )}
 
-          {code && !loading && (
+          {prompt && !loading && !loadingPrompt && (
             <>
+              {error && (
+                <div className="mx-6 mt-4 flex-shrink-0 bg-red-950/40 border border-red-800/50 rounded-lg px-4 py-3">
+                  <p className="text-red-400 text-xs font-medium">Generation failed — you can still copy the prompt below and run it manually.</p>
+                  <p className="text-red-300/60 text-xs mt-0.5">{error}</p>
+                </div>
+              )}
               {/* Tabs */}
               <div className="flex gap-1 px-6 pt-4 pb-0 flex-shrink-0">
                 {(['code', 'prompt'] as const).map((tab) => (
@@ -205,7 +278,9 @@ export function EAModal({ result, onClose }: Props) {
               </div>
               <div className="flex-1 overflow-auto border-t border-slate-800">
                 <pre className="p-6 text-xs font-mono leading-relaxed whitespace-pre min-w-max text-slate-300">
-                  {activeTab === 'code' ? code : prompt}
+                  {activeTab === 'code'
+                    ? (code || '// EA code generation failed.\n// Switch to the Prompt tab to copy the prompt and run it manually.')
+                    : prompt}
                 </pre>
               </div>
             </>

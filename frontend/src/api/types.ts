@@ -162,4 +162,10 @@ export interface EAResponse {
   platform: EAPlatform;
   filename: string;
   prompt: string;
+  error?: string;
+}
+
+export interface EAPromptResponse {
+  prompt: string;
+  filename: string;
 }
