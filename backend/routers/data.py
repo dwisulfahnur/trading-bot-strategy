@@ -28,6 +28,8 @@ STRATEGY_PARAMS: dict[str, list[dict]] = {
     "momentum_candle": [
         {"name": "ema_period",        "type": "int",   "default": 200,  "min": 10,  "max": 500},
         {"name": "ema_fast_period",   "type": "int",   "default": 50,   "min": 5,   "max": 300},
+        {"name": "ema_timeframe",     "type": "str",   "default": "same",
+         "options": ["same", "M1", "M5", "M15", "M30", "H1", "H4", "D1"]},
         {"name": "ema_filter_mode",   "type": "str",   "default": "single",
          "options": ["none", "single", "dual"]},
         {"name": "body_ratio_min",    "type": "float", "default": 0.70, "min": 0.5, "max": 0.95, "step": 0.01},

@@ -790,7 +790,6 @@ def _prompt_momentum_candle(
     params: dict, lang: str, mt_ver: str,
     perf: str, param_lines_str: str,
 ) -> str:
-    ema_p            = params.get("ema_period", 200)
     body_ratio       = params.get("body_ratio_min", 0.70)
     vol_factor       = params.get("volume_factor", 1.5)
     vol_lookback     = int(params.get("volume_lookback", 23))
@@ -799,11 +798,38 @@ def _prompt_momentum_candle(
     tp_mult          = params.get("tp_mult", 1.0)
     max_pending_bars = int(params.get("max_pending_bars", 5))
     sessions         = params.get("sessions", "all")
+    ema_mode         = params.get("ema_filter_mode", "single")
+    ema_tf           = params.get("ema_timeframe", "same")
     body_pct         = int(round(body_ratio * 100))
     session_sec      = _session_filter_section(sessions)
-    sideways         = params.get("sideways_filter", "none")
     filter_desc      = _sideways_filter_desc(params)
     risk_mgmt_line   = _risk_input_group_line(params)
+
+    ema_g_decls, ema_init_code, ema_copy_code = _ema_init_block(params)
+
+    ema_filter_label = {
+        "none":   "None — signals in both directions regardless of EMA",
+        "single": "Single EMA — bullish MC only when close[1] > EMA, bearish when close[1] < EMA",
+        "dual":   "Dual EMA — bullish MC only when fast EMA > slow EMA, bearish when fast EMA < slow EMA",
+    }.get(ema_mode, ema_mode)
+    tf_note = "" if ema_tf == "same" else f" (sourced from **{ema_tf}** timeframe)"
+    ema_dual_extra = ", ema_fast_period" if ema_mode == "dual" else ""
+
+    if ema_mode == "dual":
+        ema_signal_logic = (
+            "- **Bullish MC**: `close[1] > open[1]` AND `fast_ema1 > slow_ema1` → BUY signal\n"
+            "- **Bearish MC**: `close[1] < open[1]` AND `fast_ema1 < slow_ema1` → SELL signal"
+        )
+    elif ema_mode == "single":
+        ema_signal_logic = (
+            "- **Bullish MC**: `close[1] > open[1]` AND `close[1] > ema1` → BUY signal\n"
+            "- **Bearish MC**: `close[1] < open[1]` AND `close[1] < ema1` → SELL signal"
+        )
+    else:
+        ema_signal_logic = (
+            "- **Bullish MC**: `close[1] > open[1]` → BUY signal\n"
+            "- **Bearish MC**: `close[1] < open[1]` → SELL signal"
+        )
 
     return f"""## Strategy: Momentum Candle Scalping
 ## Platform: MetaTrader {mt_ver} ({lang})
@@ -821,7 +847,7 @@ def _prompt_momentum_candle(
 ## Input Groups
 
 Group all `input` variables using `input group "..."` (MQL5) or string separator inputs (MQL4):
-- `"=== Trend Filter ==="` — ema_period
+- `"=== Trend Filter ==="` — ema_filter_mode, ema_period{ema_dual_extra}, ema_timeframe
 - `"=== Momentum Candle ==="` — body_ratio_min, volume_factor, volume_lookback
 - `"=== Entry & Exit ==="` — retracement_pct, sl_mult, tp_mult, max_pending_bars
 - `"=== Session Filter ==="` — sessions (display label)
@@ -834,13 +860,20 @@ Group all `input` variables using `input group "..."` (MQL5) or string separator
 ## Global State
 
 ```
-int      g_ema_handle      // created in OnInit
-datetime g_last_bar_time   // new-bar guard
+{ema_g_decls}datetime g_last_bar_time   // new-bar guard
 ulong    g_pending_ticket  // ticket of active limit order (0 = none)
 int      g_pending_dir     // 1 = buy limit, -1 = sell limit, 0 = none
 double   g_mc_high         // high of the momentum candle that placed the order
 double   g_mc_low          // low  of the momentum candle that placed the order
 int      g_pending_bars    // bars elapsed since order was placed
+```
+
+---
+
+## OnInit
+
+```
+{ema_init_code}
 ```
 
 ---
@@ -871,9 +904,9 @@ If any position is open for this symbol + magic number → return.
 {session_sec}
 
 ### Step 5 — EMA trend filter
+**EMA filter mode**: {ema_filter_label}{tf_note}
 ```
-double ema_buf[2]; CopyBuffer(g_ema_handle, 0, 0, 2, ema_buf);
-double ema1 = ema_buf[1];
+{ema_copy_code}
 ```
 
 ### Step 6 — Detect momentum candle on bar[1]
@@ -890,9 +923,8 @@ Momentum candle conditions:
 - `body_ratio >= {body_ratio}`  ({body_pct}% of range is directional body)
 - `tick_volume[1] > avg_vol * {vol_factor}`
 
-Signal direction:
-- **Bullish MC**: `close[1] > open[1]` AND `close[1] > ema1` → BUY signal
-- **Bearish MC**: `close[1] < open[1]` AND `close[1] < ema1` → SELL signal
+Signal direction (apply EMA filter from Step 5):
+{ema_signal_logic}
 - Neither → return
 
 ### Step 7 — Sideways filter

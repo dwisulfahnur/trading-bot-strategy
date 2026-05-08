@@ -48,9 +48,13 @@ sideways_filter = "stochrsi"    → skip signals when StochRSI is not in the ext
                                     sells only when StochRSI > overbought)
 """
 
+from pathlib import Path
+
 import polars as pl
 
 from strategies.base import BaseStrategy
+
+_DATA_DIR = Path(__file__).parent.parent / "data" / "parquet" / "ohlcv"
 
 
 class MomentumCandleStrategy(BaseStrategy):
@@ -58,9 +62,11 @@ class MomentumCandleStrategy(BaseStrategy):
 
     def __init__(
         self,
+        symbol: str = "XAUUSD",
         ema_period: int = 200,
         ema_fast_period: int = 50,
         ema_filter_mode: str = "single",
+        ema_timeframe: str = "same",
         body_ratio_min: float = 0.70,
         volume_factor: float = 1.5,
         volume_lookback: int = 23,
@@ -89,9 +95,11 @@ class MomentumCandleStrategy(BaseStrategy):
         stochrsi_oversold: float = 20.0,
         stochrsi_overbought: float = 80.0,
     ) -> None:
+        self.symbol = symbol
         self.ema_period = ema_period
         self.ema_fast_period = ema_fast_period
         self.ema_filter_mode = ema_filter_mode
+        self.ema_timeframe = ema_timeframe
         self.body_ratio_min = body_ratio_min
         self.volume_factor = volume_factor
         self.volume_lookback = volume_lookback
@@ -119,11 +127,14 @@ class MomentumCandleStrategy(BaseStrategy):
     # ------------------------------------------------------------------
 
     def generate_signals(self, df: pl.DataFrame) -> pl.DataFrame:
-        # EMA trend filter
-        df = df.with_columns([
-            pl.col("close").ewm_mean(span=self.ema_period,      adjust=False).alias("ema"),
-            pl.col("close").ewm_mean(span=self.ema_fast_period, adjust=False).alias("_ema_fast"),
-        ])
+        # EMA trend filter (same TF or higher TF via join_asof)
+        if self.ema_timeframe == "same":
+            df = df.with_columns([
+                pl.col("close").ewm_mean(span=self.ema_period,      adjust=False).alias("ema"),
+                pl.col("close").ewm_mean(span=self.ema_fast_period, adjust=False).alias("_ema_fast"),
+            ])
+        else:
+            df = self._load_htf_ema(df)
 
         # Body ratio: |close - open| / (high - low)
         df = df.with_columns(
@@ -206,3 +217,30 @@ class MomentumCandleStrategy(BaseStrategy):
         df = df.with_columns([signal, entry_limit, sl, tp])
         df = df.drop(["_body_ratio", "_avg_ticks", "_ema_fast", "_trend_ok_long", "_trend_ok_short"])
         return self._apply_session_filter(df, self.sessions)
+
+    def _load_htf_ema(self, df: pl.DataFrame) -> pl.DataFrame:
+        """Load a higher-timeframe parquet, compute both EMAs there, join_asof back."""
+        years = sorted(df["_year"].unique().to_list())
+        frames = []
+        for year in years:
+            path = _DATA_DIR / self.ema_timeframe / f"{self.symbol}_{self.ema_timeframe}_{year}.parquet"
+            if path.exists():
+                frames.append(pl.read_parquet(path, columns=["time", "close"]))
+
+        if not frames:
+            raise FileNotFoundError(
+                f"No {self.ema_timeframe} data found for {self.symbol} years {years}. "
+                f"Check {_DATA_DIR / self.ema_timeframe}/"
+            )
+
+        htf = (
+            pl.concat(frames)
+            .sort("time")
+            .with_columns([
+                pl.col("close").ewm_mean(span=self.ema_period,      adjust=False).alias("ema"),
+                pl.col("close").ewm_mean(span=self.ema_fast_period, adjust=False).alias("_ema_fast"),
+            ])
+            .select(["time", "ema", "_ema_fast"])
+        )
+
+        return df.sort("time").join_asof(htf, on="time", strategy="backward")

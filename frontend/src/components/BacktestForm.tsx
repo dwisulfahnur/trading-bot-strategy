@@ -550,7 +550,7 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
   momentum_candle: [
     {
       title: 'Signal Generation',
-      params: ['ema_filter_mode', 'ema_period', 'ema_fast_period', 'body_ratio_min', 'volume_factor', 'volume_lookback'],
+      params: ['ema_filter_mode', 'ema_period', 'ema_fast_period', 'ema_timeframe', 'body_ratio_min', 'volume_factor', 'volume_lookback'],
     },
     {
       title: 'Entry & Exit',
