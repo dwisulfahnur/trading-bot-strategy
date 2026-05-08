@@ -282,7 +282,22 @@ const PARAM_META: Record<string, ParamInfo> = {
   sl_tp_mode: {
     label: 'SL / TP Mode',
     description:
-      '"RR Ratio" (default): take-profit is a multiple of the structural SL distance — e.g. 2.0 = 2× the SL distance. "Pips": fixed pip distances for both SL and TP, independent of market structure, converted to a price level using the pair\'s pip multiplier. "% of price" (pip_breakout only): SL/TP as a percentage of entry price.',
+      '"RR Ratio" (default): take-profit is a multiple of the structural SL distance — e.g. 2.0 = 2× the SL distance. "Pips": fixed pip distances for both SL and TP, independent of market structure, converted to a price level using the pair\'s pip multiplier. "% of price" (pip_breakout only): SL/TP as a percentage of entry price. "ATR": SL/TP are a multiple of the Average True Range, adapting automatically to volatility.',
+  },
+  atr_period: {
+    label: 'ATR Period',
+    description:
+      'Number of bars used to compute the Average True Range (Wilder\'s EWM). Larger values produce a smoother, slower-reacting ATR; smaller values react faster to recent volatility.',
+  },
+  atr_sl_mult: {
+    label: 'ATR SL Multiplier',
+    description:
+      'Stop-loss is placed this many ATRs away from the entry. e.g. 1.5 × ATR(14). Higher values give wider stops that survive normal volatility but reduce RR.',
+  },
+  atr_tp_mult: {
+    label: 'ATR TP Multiplier',
+    description:
+      'Take-profit is placed this many ATRs away from the entry. e.g. 3.0 × ATR(14). Set higher than SL multiplier to achieve a positive RR.',
   },
   sl_pips: {
     label: 'Stop-Loss (pips)',
@@ -604,7 +619,7 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
   pip_breakout: [
     {
       title: 'Signal Generation',
-      params: ['level_detector', 'lookback_bars', 'fractal_n_before', 'fractal_n_after', 'sl_tp_mode', 'sl_pips', 'tp_pips', 'sl_pct', 'tp_pct', 'entry_mode', 'entry_offset_pips'],
+      params: ['level_detector', 'lookback_bars', 'fractal_n_before', 'fractal_n_after', 'sl_tp_mode', 'sl_pips', 'tp_pips', 'sl_pct', 'tp_pct', 'atr_period', 'atr_sl_mult', 'atr_tp_mult', 'entry_mode', 'entry_offset_pips'],
     },
     {
       title: 'Pending Order',
@@ -1424,6 +1439,7 @@ export function BacktestForm({ onResult, initialParams }: Props) {
               if ('sl_tp_mode' in stratParams) return slTpMode === 'pips';
             }
             if (name === 'sl_pct' || name === 'tp_pct') return slTpMode === 'pct';
+            if (name.startsWith('atr_'))              return slTpMode === 'atr';
             if (name === 'pending_cancel_buffer_pips') {
               const pc = (stratParams['pending_cancel'] ?? 'max_bars') as string;
               return pc === 'sl_break' || pc === 'both';

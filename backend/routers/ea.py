@@ -1933,12 +1933,28 @@ for(int k = 3; k <= InpLookbackBars + 1; k++) {{
 ```"""
 
     # ── SL/TP computation section ─────────────────────────────────────────────
+    atr_period   = int(params.get("atr_period", 14))
+    atr_sl_mult  = float(params.get("atr_sl_mult", 1.5))
+    atr_tp_mult  = float(params.get("atr_tp_mult", 3.0))
+
     if sl_tp_mode == "pct":
         sl_tp_input_group = "sl_tp_mode, sl_pct, tp_pct"
         sl_tp_desc = f"""**SL/TP mode: pct** — distances are a percentage of the anchor price.
 ```
 double sl_dist = anchor * InpSlPct / 100.0;   // default {sl_pct:g}%
 double tp_dist = anchor * InpTpPct / 100.0;   // default {tp_pct:g}%
+```"""
+    elif sl_tp_mode == "atr":
+        sl_tp_input_group = "sl_tp_mode, atr_period, atr_sl_mult, atr_tp_mult"
+        sl_tp_desc = f"""**SL/TP mode: atr** — distances are multiples of ATR(Wilder's EWM), adapting to volatility.
+Create an ATR indicator handle with period {atr_period} (Wilder's smoothing).
+```
+int g_atr_handle = iATR(_Symbol, PERIOD_CURRENT, InpAtrPeriod);
+double atr_buf[1];
+CopyBuffer(g_atr_handle, 0, 1, 1, atr_buf);
+double atr_val = atr_buf[0];
+double sl_dist  = atr_val * InpAtrSlMult;   // default {atr_sl_mult:g} × ATR
+double tp_dist  = atr_val * InpAtrTpMult;   // default {atr_tp_mult:g} × ATR
 ```"""
     else:
         sl_tp_input_group = f"sl_tp_mode, sl_pips, tp_pips, pip_mult"
@@ -2064,6 +2080,8 @@ else  // still pending
     level_group = level_det_input_lines
     if sl_tp_mode == "pct":
         sltp_group = f"- `\"=== SL / TP ===\"` — sl_tp_mode, sl_pct, tp_pct"
+    elif sl_tp_mode == "atr":
+        sltp_group = f"- `\"=== SL / TP ===\"` — sl_tp_mode, atr_period, atr_sl_mult, atr_tp_mult"
     else:
         sltp_group = f"- `\"=== SL / TP ===\"` — sl_tp_mode, sl_pips, tp_pips, pip_mult"
 

@@ -45,11 +45,14 @@ class PipBreakoutStrategy(BaseStrategy):
         lookback_bars: int = 20,
         fractal_n_before: int = 5,
         fractal_n_after: int = 5,
-        sl_tp_mode: str = "pips",          # pips | pct
+        sl_tp_mode: str = "pips",          # pips | pct | atr
         sl_pips: float = 200.0,
         tp_pips: float = 400.0,
         sl_pct: float = 1.0,
         tp_pct: float = 2.0,
+        atr_period: int = 14,
+        atr_sl_mult: float = 1.5,
+        atr_tp_mult: float = 3.0,
         entry_offset_pips: float = 0.0,
         entry_mode: str = "close",         # close | touch
         pending_cancel: str = "max_bars",  # none | max_bars | sl_break | both
@@ -86,6 +89,9 @@ class PipBreakoutStrategy(BaseStrategy):
         self.tp_pips = tp_pips
         self.sl_pct = sl_pct
         self.tp_pct = tp_pct
+        self.atr_period = atr_period
+        self.atr_sl_mult = atr_sl_mult
+        self.atr_tp_mult = atr_tp_mult
         self.entry_offset_pips = entry_offset_pips
         self.entry_mode = entry_mode
         self.pending_cancel = pending_cancel
@@ -141,6 +147,18 @@ class PipBreakoutStrategy(BaseStrategy):
                 pl.col("low").shift(1).rolling_min(window_size=n).alias("_level_low"),
             ])
 
+        # ── ATR (Wilder's EWM) ───────────────────────────────────────────
+        df = df.with_columns([
+            pl.max_horizontal(
+                pl.col("high") - pl.col("low"),
+                (pl.col("high") - pl.col("close").shift(1)).abs(),
+                (pl.col("low")  - pl.col("close").shift(1)).abs(),
+            ).alias("_tr")
+        ])
+        df = df.with_columns(
+            pl.col("_tr").ewm_mean(alpha=1.0 / self.atr_period, adjust=False).alias("_atr")
+        )
+
         df = self._add_sideways_filter(df)
 
         # ── Pull arrays for Python scan ───────────────────────────────────
@@ -151,6 +169,7 @@ class PipBreakoutStrategy(BaseStrategy):
         ema_fast_arr   = df["_ema_fast"].to_list()
         trend_ok_long  = df["_trend_ok_long"].to_list()
         trend_ok_short = df["_trend_ok_short"].to_list()
+        atr_arr        = df["_atr"].to_list()
         n_bars         = len(close_arr)
 
         if self.ema_filter_mode == "dual":
@@ -203,10 +222,12 @@ class PipBreakoutStrategy(BaseStrategy):
                 rh = level_high[i]
                 rl = level_low[i]
 
+            atr_i = atr_arr[i]
+
             if self.entry_mode == "touch":
                 if long_ok and rh is not None and rh != last_used_high:
                     stop = rh + offset_dist
-                    sl_p, tp_p = self._sl_tp_scalar(stop, 1)
+                    sl_p, tp_p = self._sl_tp_scalar(stop, 1, atr_i)
                     signals[i]     = 1
                     entry_stops[i] = stop
                     sl_out[i]      = sl_p
@@ -217,7 +238,7 @@ class PipBreakoutStrategy(BaseStrategy):
 
                 elif short_ok and rl is not None and rl != last_used_low:
                     stop = rl - offset_dist
-                    sl_p, tp_p = self._sl_tp_scalar(stop, -1)
+                    sl_p, tp_p = self._sl_tp_scalar(stop, -1, atr_i)
                     signals[i]     = -1
                     entry_stops[i] = stop
                     sl_out[i]      = sl_p
@@ -230,7 +251,7 @@ class PipBreakoutStrategy(BaseStrategy):
                 if (long_ok and rh is not None and c is not None
                         and c > rh and rh != last_used_high):
                     anchor = rh + offset_dist if offset_dist > 0 else c
-                    sl_p, tp_p = self._sl_tp_scalar(anchor, 1)
+                    sl_p, tp_p = self._sl_tp_scalar(anchor, 1, atr_i)
                     signals[i] = 1
                     sl_out[i]  = sl_p
                     tp_out[i]  = tp_p
@@ -243,7 +264,7 @@ class PipBreakoutStrategy(BaseStrategy):
                 elif (short_ok and rl is not None and c is not None
                         and c < rl and rl != last_used_low):
                     anchor = rl - offset_dist if offset_dist > 0 else c
-                    sl_p, tp_p = self._sl_tp_scalar(anchor, -1)
+                    sl_p, tp_p = self._sl_tp_scalar(anchor, -1, atr_i)
                     signals[i] = -1
                     sl_out[i]  = sl_p
                     tp_out[i]  = tp_p
@@ -263,7 +284,7 @@ class PipBreakoutStrategy(BaseStrategy):
         if emit_cancel:
             df = df.with_columns(pl.Series("cancel_level", cancel_lvls, dtype=pl.Float64))
 
-        df = df.drop(["_level_high", "_level_low", "_ema_fast", "_trend_ok_long", "_trend_ok_short"])
+        df = df.drop(["_level_high", "_level_low", "_ema_fast", "_trend_ok_long", "_trend_ok_short", "_tr", "_atr"])
         return self._apply_session_filter(df, self.sessions)
 
     @staticmethod
@@ -290,12 +311,17 @@ class PipBreakoutStrategy(BaseStrategy):
         confirmed = mask.shift(n_after)
         return pl.when(confirmed).then(pl.col("low").shift(n_after)).otherwise(None)
 
-    def _sl_tp_scalar(self, anchor: float, direction: int) -> tuple[float, float]:
+    def _sl_tp_scalar(self, anchor: float, direction: int, atr: float | None = None) -> tuple[float, float]:
         """Return (sl_price, tp_price) from a scalar anchor price and direction (+1/-1)."""
         if self.sl_tp_mode == "pct":
             sl = anchor * (1.0 - self.sl_pct / 100.0) if direction == 1 else anchor * (1.0 + self.sl_pct / 100.0)
             tp = anchor * (1.0 + self.tp_pct / 100.0) if direction == 1 else anchor * (1.0 - self.tp_pct / 100.0)
-        else:
+        elif self.sl_tp_mode == "atr" and atr is not None:
+            sl_d = atr * self.atr_sl_mult
+            tp_d = atr * self.atr_tp_mult
+            sl   = anchor - sl_d if direction == 1 else anchor + sl_d
+            tp   = anchor + tp_d if direction == 1 else anchor - tp_d
+        else:  # pips (default)
             sl_d = self.sl_pips / self.pip_mult
             tp_d = self.tp_pips / self.pip_mult
             sl   = anchor - sl_d if direction == 1 else anchor + sl_d
