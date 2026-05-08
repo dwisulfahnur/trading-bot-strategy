@@ -41,6 +41,7 @@ VALID_TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4"]
 PAIR_CONFIG: dict[str, dict] = {
     # Metals
     "XAUUSD": {"contract_size": 100,     "pip_mult": 10.0},
+    "XAGUSD": {"contract_size": 5000,    "pip_mult": 1000.0},
     # Crypto (USD-quoted, 1 lot = 1 coin)
     "BTCUSD": {"contract_size": 1,       "pip_mult": 1.0},
     "ETHUSD": {"contract_size": 1,       "pip_mult": 1.0},
