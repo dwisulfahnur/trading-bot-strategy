@@ -33,6 +33,29 @@ function computePeriodDrawdown(
   return worstPct;
 }
 
+function computeMaxDailyDdFromInitial(
+  trades: TradeRecord[],
+  initialCapital: number,
+): number {
+  if (trades.length === 0) return 0;
+  const sorted = [...trades].sort((a, b) => a.trade - b.trade);
+  const groups = new Map<string, TradeRecord[]>();
+  for (const t of sorted) {
+    const key = t.exit_time.slice(0, 10);
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(t);
+  }
+  let worstPct = 0;
+  for (const dayTrades of groups.values()) {
+    const dayLow = Math.min(...dayTrades.map((t) => t.capital_after));
+    if (dayLow < initialCapital) {
+      const pct = (initialCapital - dayLow) / initialCapital * 100;
+      if (pct > worstPct) worstPct = pct;
+    }
+  }
+  return worstPct;
+}
+
 function fmtDuration(mins: number): string {
   if (mins < 60) return `${Math.round(mins)}m`;
   const h = Math.floor(mins / 60);
@@ -111,6 +134,7 @@ export function ResultCard({ results, stoppedOut }: Props) {
 
   const maxDailyDd = computePeriodDrawdown(trades, initial_capital, (t) => t.exit_time.slice(0, 10));
   const maxMonthlyDd = computePeriodDrawdown(trades, initial_capital, (t) => t.exit_time.slice(0, 7));
+  const maxDailyDdFromInitial = computeMaxDailyDdFromInitial(trades, initial_capital);
 
   const holdTimes = trades.map(holdMinutes);
   const avgHold = holdTimes.length ? holdTimes.reduce((a, b) => a + b, 0) / holdTimes.length : 0;
@@ -167,6 +191,11 @@ export function ResultCard({ results, stoppedOut }: Props) {
             label="Max Daily DD"
             value={maxDailyDd > 0 ? `-${maxDailyDd.toFixed(2)}%` : '—'}
             color={maxDailyDd < 5 ? 'text-slate-200' : 'text-red-400'}
+          />
+          <StatRow
+            label="Max Daily DD vs Initial"
+            value={maxDailyDdFromInitial > 0 ? `-${maxDailyDdFromInitial.toFixed(2)}%` : '—'}
+            color={maxDailyDdFromInitial < 5 ? 'text-slate-200' : 'text-red-400'}
           />
           <StatRow
             label="Max Monthly DD"
