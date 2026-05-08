@@ -19,7 +19,7 @@ RESULT_DIR = Path(__file__).parent.parent.parent / "result"
 
 router = APIRouter(prefix="/backtest")
 
-VALID_TIMEFRAMES = ["M1", "M5", "M15", "H1", "H4"]
+VALID_TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4"]
 
 
 @router.post("/run", response_model=JobStatus)

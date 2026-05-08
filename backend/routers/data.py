@@ -19,7 +19,7 @@ router = APIRouter()
 
 STRATEGIES_DIR = Path(__file__).parent.parent.parent / "strategies"
 DATA_DIR = Path(__file__).parent.parent.parent / "data" / "parquet" / "ohlcv"
-VALID_TIMEFRAMES = ["M1", "M5", "M15", "H1", "H4"]
+VALID_TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4"]
 
 # ---------------------------------------------------------------------------
 # Hard-coded parameter specs per strategy (extend as new strategies added)
@@ -64,7 +64,7 @@ STRATEGY_PARAMS: dict[str, list[dict]] = {
         {"name": "ema_period",        "type": "int",   "default": 200,   "min": 10,   "max": 500},
         {"name": "ema_fast_period",   "type": "int",   "default": 50,    "min": 5,    "max": 300},
         {"name": "ema_timeframe",     "type": "str",   "default": "same",
-         "options": ["same", "M1", "M5", "M15", "H1", "H4", "D1"]},
+         "options": ["same", "M1", "M5", "M15", "M30", "H1", "H4", "D1"]},
         {"name": "ema_filter_mode",   "type": "str",   "default": "single",
          "options": ["none", "single", "dual"]},
         {"name": "fractal_n",         "type": "int",   "default": 9,     "min": 2,    "max": 20},
@@ -102,7 +102,7 @@ STRATEGY_PARAMS: dict[str, list[dict]] = {
         {"name": "ema_period",        "type": "int",   "default": 200,   "min": 10,   "max": 500},
         {"name": "ema_fast_period",   "type": "int",   "default": 50,    "min": 5,    "max": 300},
         {"name": "ema_timeframe",     "type": "str",   "default": "same",
-         "options": ["same", "M1", "M5", "M15", "H1", "H4", "D1"]},
+         "options": ["same", "M1", "M5", "M15", "M30", "H1", "H4", "D1"]},
         {"name": "swing_n_before",    "type": "int",   "default": 5,     "min": 1,    "max": 20},
         {"name": "swing_n_after",     "type": "int",   "default": 5,     "min": 1,    "max": 20},
         {"name": "rr_ratio",          "type": "float", "default": 2.0,   "min": 0.5,  "max": 5.0,  "step": 0.1},
@@ -152,7 +152,7 @@ STRATEGY_PARAMS: dict[str, list[dict]] = {
         {"name": "ema_period",         "type": "int",   "default": 200,   "min": 10,    "max": 500},
         {"name": "ema_fast_period", "type": "int",   "default": 50,    "min": 5,     "max": 300},
         {"name": "ema_timeframe",   "type": "str",   "default": "same",
-         "options": ["same", "M1", "M5", "M15", "H1", "H4", "D1"]},
+         "options": ["same", "M1", "M5", "M15", "M30", "H1", "H4", "D1"]},
         {"name": "ema_filter_mode", "type": "str",   "default": "single",
          "options": ["none", "single", "dual"]},
         {"name": "sessions",        "type": "str",   "default": "all",
@@ -180,7 +180,7 @@ STRATEGY_PARAMS: dict[str, list[dict]] = {
         {"name": "ema_period",        "type": "int",   "default": 200,   "min": 10,   "max": 500},
         {"name": "ema_fast_period",   "type": "int",   "default": 50,    "min": 5,    "max": 300},
         {"name": "ema_timeframe",     "type": "str",   "default": "same",
-         "options": ["same", "M1", "M5", "M15", "H1", "H4", "D1"]},
+         "options": ["same", "M1", "M5", "M15", "M30", "H1", "H4", "D1"]},
         {"name": "ema_filter_mode",   "type": "str",   "default": "single",
          "options": ["none", "single", "dual"]},
         {"name": "swing_n_before",    "type": "int",   "default": 5,     "min": 1,    "max": 20},

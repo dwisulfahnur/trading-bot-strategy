@@ -1150,7 +1150,7 @@ SL is moved to **{be_target}**. Fires at most once per trade (`g_be_done` preven
 """
 
     # EMA indicator setup
-    _TF_MAP = {"M1": "PERIOD_M1", "M5": "PERIOD_M5", "M15": "PERIOD_M15",
+    _TF_MAP = {"M1": "PERIOD_M1", "M5": "PERIOD_M5", "M15": "PERIOD_M15", "M30": "PERIOD_M30",
                "H1": "PERIOD_H1", "H4": "PERIOD_H4", "D1": "PERIOD_D1"}
     if ema_tf == "same":
         ema_init   = f"iMA(_Symbol, PERIOD_CURRENT, {ema_p}, 0, MODE_EMA, PRICE_CLOSE)"
@@ -1698,7 +1698,7 @@ If all true:
 # ---------------------------------------------------------------------------
 
 _TF_CONST: dict[str, str] = {
-    "M1": "PERIOD_M1", "M5": "PERIOD_M5", "M15": "PERIOD_M15",
+    "M1": "PERIOD_M1", "M5": "PERIOD_M5", "M15": "PERIOD_M15", "M30": "PERIOD_M30",
     "H1": "PERIOD_H1", "H4": "PERIOD_H4", "D1": "PERIOD_D1",
 }
 

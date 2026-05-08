@@ -26,7 +26,7 @@ from strategies.base import BaseStrategy
 DATA_DIR   = Path(__file__).parent / "data" / "parquet" / "ohlcv"
 TICKS_DIR  = Path(__file__).parent / "data" / "parquet" / "ticks"
 RESULT_DIR = Path(__file__).parent / "result"
-VALID_TIMEFRAMES = ["M1", "M5", "M15", "H1", "H4"]
+VALID_TIMEFRAMES = ["M1", "M5", "M15", "M30", "H1", "H4"]
 
 # Per-pair instrument specs.  Add new pairs here when data becomes available.
 # contract_size : units per standard lot (affects lot size calculation)
