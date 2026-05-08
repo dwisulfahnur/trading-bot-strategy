@@ -31,6 +31,16 @@ from strategies.base import BaseStrategy
 
 _DATA_DIR = Path(__file__).parent.parent / "data" / "parquet" / "ohlcv"
 
+_PIP_MULT: dict[str, float] = {
+    "XAUUSD": 10.0,
+    "XAGUSD": 100.0,
+    "BTCUSD": 1.0,  "ETHUSD": 1.0,  "USTEC": 1.0,
+    "EURUSD": 10_000.0, "GBPUSD": 10_000.0,
+    "EURJPY": 100.0, "GBPJPY": 100.0, "USDJPY": 100.0,
+    "AUDJPY": 100.0, "CADJPY": 100.0, "CHFJPY": 100.0,
+    "EURGBP": 10_000.0,
+}
+
 
 class MarketStructureBreakoutStrategy(BaseStrategy):
     name = "breakout_strategy"
@@ -43,8 +53,19 @@ class MarketStructureBreakoutStrategy(BaseStrategy):
         symbol: str = "XAUUSD",
         swing_n_before: int = 5,
         swing_n_after: int = 5,
-        rr_ratio: float = 2.0,
-        sl_mode: str = "structure",
+        trade_direction: str = "both",
+        # Long (buy) SL/TP
+        long_sl_tp_mode: str = "rr",
+        long_rr_ratio: float = 2.0,
+        long_sl_mode: str = "structure",    # structure | signal_candle
+        long_sl_pips: float = 200.0,
+        long_tp_pips: float = 400.0,
+        # Short (sell) SL/TP
+        short_sl_tp_mode: str = "rr",
+        short_rr_ratio: float = 2.0,
+        short_sl_mode: str = "structure",
+        short_sl_pips: float = 200.0,
+        short_tp_pips: float = 400.0,
         ema_filter_mode: str = "dual",
         # Market session filter
         sessions: str = "all",
@@ -70,8 +91,18 @@ class MarketStructureBreakoutStrategy(BaseStrategy):
         self.symbol = symbol
         self.swing_n_before = swing_n_before
         self.swing_n_after = swing_n_after
-        self.rr_ratio = rr_ratio
-        self.sl_mode = sl_mode
+        self.trade_direction = trade_direction
+        self.long_sl_tp_mode = long_sl_tp_mode
+        self.long_rr_ratio = long_rr_ratio
+        self.long_sl_mode = long_sl_mode
+        self.long_sl_pips = long_sl_pips
+        self.long_tp_pips = long_tp_pips
+        self.short_sl_tp_mode = short_sl_tp_mode
+        self.short_rr_ratio = short_rr_ratio
+        self.short_sl_mode = short_sl_mode
+        self.short_sl_pips = short_sl_pips
+        self.short_tp_pips = short_tp_pips
+        self.pip_mult = _PIP_MULT.get(symbol, 10.0)
         self.ema_filter_mode = ema_filter_mode
         self.sessions = sessions
         self.sideways_filter = sideways_filter
@@ -243,15 +274,24 @@ class MarketStructureBreakoutStrategy(BaseStrategy):
                     and c > last_sh
                     and (prev_close is None or prev_close <= last_sh)
                     and ema_ok_long
-                    and trend_ok_long[i]):
+                    and trend_ok_long[i]
+                    and self.trade_direction != "short_only"):
 
-                sl_price = hl_level if self.sl_mode == "structure" else low[i]
-                dist = c - sl_price
-                if dist > 0:
+                if self.long_sl_tp_mode == "pips":
+                    sl_d = self.long_sl_pips / self.pip_mult
+                    tp_d = self.long_tp_pips / self.pip_mult
                     signals[i] = 1
-                    sl_out[i]  = sl_price
-                    tp_out[i]  = c + self.rr_ratio * dist
-                    hl_level   = None  # consumed — rearms on next HH+HL
+                    sl_out[i]  = c - sl_d
+                    tp_out[i]  = c + tp_d
+                    hl_level   = None
+                else:
+                    sl_price = hl_level if self.long_sl_mode == "structure" else low[i]
+                    dist = c - sl_price
+                    if dist > 0:
+                        signals[i] = 1
+                        sl_out[i]  = sl_price
+                        tp_out[i]  = c + self.long_rr_ratio * dist
+                        hl_level   = None  # consumed — rearms on next HH+HL
 
             # ── Break of Structure — Short ────────────────────────────────
 
@@ -260,15 +300,24 @@ class MarketStructureBreakoutStrategy(BaseStrategy):
                     and c < last_sl
                     and (prev_close is None or prev_close >= last_sl)
                     and ema_ok_short
-                    and trend_ok_short[i]):
+                    and trend_ok_short[i]
+                    and self.trade_direction != "long_only"):
 
-                sl_price = lh_level if self.sl_mode == "structure" else high[i]
-                dist = sl_price - c
-                if dist > 0:
+                if self.short_sl_tp_mode == "pips":
+                    sl_d = self.short_sl_pips / self.pip_mult
+                    tp_d = self.short_tp_pips / self.pip_mult
                     signals[i] = -1
-                    sl_out[i]  = sl_price
-                    tp_out[i]  = c - self.rr_ratio * dist
-                    lh_level   = None  # consumed — rearms on next LL+LH
+                    sl_out[i]  = c + sl_d
+                    tp_out[i]  = c - tp_d
+                    lh_level   = None
+                else:
+                    sl_price = lh_level if self.short_sl_mode == "structure" else high[i]
+                    dist = sl_price - c
+                    if dist > 0:
+                        signals[i] = -1
+                        sl_out[i]  = sl_price
+                        tp_out[i]  = c - self.short_rr_ratio * dist
+                        lh_level   = None  # consumed — rearms on next LL+LH
 
             prev_close = c
 

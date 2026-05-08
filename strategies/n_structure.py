@@ -27,6 +27,7 @@ _DATA_DIR = Path(__file__).parent.parent / "data" / "parquet" / "ohlcv"
 
 _PIP_MULT: dict[str, float] = {
     "XAUUSD": 10.0,
+    "XAGUSD": 100.0,
     "BTCUSD": 1.0,  "ETHUSD": 1.0,  "USTEC": 1.0,
     "EURUSD": 10_000.0, "GBPUSD": 10_000.0,
     "EURJPY": 100.0, "GBPJPY": 100.0, "USDJPY": 100.0,
@@ -47,11 +48,19 @@ class NStructureStrategy(BaseStrategy):
         symbol: str = "XAUUSD",
         swing_n_before: int = 5,
         swing_n_after: int = 5,
-        sl_tp_mode: str = "rr",            # rr | pips
-        rr_ratio: float = 2.0,
-        sl_mode: str = "swing_midpoint",
-        sl_pips: float = 200.0,
-        tp_pips: float = 400.0,
+        trade_direction: str = "both",
+        # Long (buy) SL/TP
+        long_sl_tp_mode: str = "rr",
+        long_rr_ratio: float = 2.0,
+        long_sl_mode: str = "swing_midpoint",   # swing_midpoint | swing_point | signal_candle
+        long_sl_pips: float = 200.0,
+        long_tp_pips: float = 400.0,
+        # Short (sell) SL/TP
+        short_sl_tp_mode: str = "rr",
+        short_rr_ratio: float = 2.0,
+        short_sl_mode: str = "swing_midpoint",
+        short_sl_pips: float = 200.0,
+        short_tp_pips: float = 400.0,
         # Pending order cancellation
         pending_cancel: str = "max_bars",
         max_pending_bars: int = 10,
@@ -81,11 +90,17 @@ class NStructureStrategy(BaseStrategy):
         self.pip_mult = _PIP_MULT.get(symbol, 10.0)
         self.swing_n_before = swing_n_before
         self.swing_n_after = swing_n_after
-        self.sl_tp_mode = sl_tp_mode
-        self.rr_ratio = rr_ratio
-        self.sl_mode = sl_mode
-        self.sl_pips = sl_pips
-        self.tp_pips = tp_pips
+        self.trade_direction = trade_direction
+        self.long_sl_tp_mode = long_sl_tp_mode
+        self.long_rr_ratio = long_rr_ratio
+        self.long_sl_mode = long_sl_mode
+        self.long_sl_pips = long_sl_pips
+        self.long_tp_pips = long_tp_pips
+        self.short_sl_tp_mode = short_sl_tp_mode
+        self.short_rr_ratio = short_rr_ratio
+        self.short_sl_mode = short_sl_mode
+        self.short_sl_pips = short_sl_pips
+        self.short_tp_pips = short_tp_pips
         self.pending_cancel = pending_cancel
         self.max_pending_bars = max_pending_bars
         self.sessions = sessions
@@ -269,13 +284,14 @@ class NStructureStrategy(BaseStrategy):
                     and hl is not None
                     and c < last_sh                     # breakout hasn't happened yet
                     and ema_ok_long_arr[i]
-                    and trend_ok_long[i]):
+                    and trend_ok_long[i]
+                    and self.trade_direction != "short_only"):
 
                 entry_stop = last_sh
 
-                if self.sl_tp_mode == "pips":
-                    sl_d = self.sl_pips / self.pip_mult
-                    tp_d = self.tp_pips / self.pip_mult
+                if self.long_sl_tp_mode == "pips":
+                    sl_d = self.long_sl_pips / self.pip_mult
+                    tp_d = self.long_tp_pips / self.pip_mult
                     signals[i]     = 1
                     entry_stops[i] = entry_stop
                     sl_out[i]      = entry_stop - sl_d
@@ -283,9 +299,9 @@ class NStructureStrategy(BaseStrategy):
                     if self.pending_cancel in ("hl_break", "both"):
                         cancel_levels[i] = hl
                 else:
-                    if self.sl_mode == "swing_midpoint":
+                    if self.long_sl_mode == "swing_midpoint":
                         sl_price = (last_sh + hl) / 2.0
-                    elif self.sl_mode == "swing_point":
+                    elif self.long_sl_mode == "swing_point":
                         sl_price = hl
                     else:                               # signal_candle
                         sl_price = low[i]
@@ -295,7 +311,7 @@ class NStructureStrategy(BaseStrategy):
                         signals[i]     = 1
                         entry_stops[i] = entry_stop
                         sl_out[i]      = sl_price
-                        tp_out[i]      = entry_stop + self.rr_ratio * dist
+                        tp_out[i]      = entry_stop + self.long_rr_ratio * dist
                         if self.pending_cancel in ("hl_break", "both"):
                             cancel_levels[i] = hl       # cancel if price breaks below HL
 
@@ -305,13 +321,14 @@ class NStructureStrategy(BaseStrategy):
                     and lh is not None
                     and c > last_sl                     # breakdown hasn't happened yet
                     and ema_ok_short_arr[i]
-                    and trend_ok_short[i]):
+                    and trend_ok_short[i]
+                    and self.trade_direction != "long_only"):
 
                 entry_stop = last_sl
 
-                if self.sl_tp_mode == "pips":
-                    sl_d = self.sl_pips / self.pip_mult
-                    tp_d = self.tp_pips / self.pip_mult
+                if self.short_sl_tp_mode == "pips":
+                    sl_d = self.short_sl_pips / self.pip_mult
+                    tp_d = self.short_tp_pips / self.pip_mult
                     signals[i]     = -1
                     entry_stops[i] = entry_stop
                     sl_out[i]      = entry_stop + sl_d
@@ -319,9 +336,9 @@ class NStructureStrategy(BaseStrategy):
                     if self.pending_cancel in ("hl_break", "both"):
                         cancel_levels[i] = lh
                 else:
-                    if self.sl_mode == "swing_midpoint":
+                    if self.short_sl_mode == "swing_midpoint":
                         sl_price = (last_sl + lh) / 2.0
-                    elif self.sl_mode == "swing_point":
+                    elif self.short_sl_mode == "swing_point":
                         sl_price = lh
                     else:                               # signal_candle
                         sl_price = high[i]
@@ -331,7 +348,7 @@ class NStructureStrategy(BaseStrategy):
                         signals[i]     = -1
                         entry_stops[i] = entry_stop
                         sl_out[i]      = sl_price
-                        tp_out[i]      = entry_stop - self.rr_ratio * dist
+                        tp_out[i]      = entry_stop - self.short_rr_ratio * dist
                         if self.pending_cancel in ("hl_break", "both"):
                             cancel_levels[i] = lh       # cancel if price breaks above LH
 

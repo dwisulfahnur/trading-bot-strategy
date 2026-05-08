@@ -309,6 +309,101 @@ const PARAM_META: Record<string, ParamInfo> = {
     description:
       'Fixed take-profit distance in pips from the entry level. e.g. 400 pips = 2× a 200-pip SL, giving a 2:1 RR.',
   },
+  trade_direction: {
+    label: 'Trade Direction',
+    description:
+      'Restricts which side the strategy may trade. "Both" allows buy and sell signals. "Long only" disables all sell signals. "Short only" disables all buy signals.',
+  },
+  long_sl_tp_mode: {
+    label: 'Long SL / TP Mode',
+    description:
+      'Controls how stop-loss and take-profit are calculated for buy (long) trades. "RR Ratio": TP is a multiple of the structural SL distance. "Pips": fixed pip distances independent of structure.',
+  },
+  long_rr_ratio: {
+    label: 'Long RR Ratio',
+    description: 'Take-profit distance for long trades = this × stop-loss distance.',
+  },
+  long_sl_pips: {
+    label: 'Long SL (pips)',
+    description: 'Fixed stop-loss distance for long trades, in pips from close.',
+  },
+  long_tp_pips: {
+    label: 'Long TP (pips)',
+    description: 'Fixed take-profit distance for long trades, in pips from close.',
+  },
+  short_sl_tp_mode: {
+    label: 'Short SL / TP Mode',
+    description:
+      'Controls how stop-loss and take-profit are calculated for sell (short) trades. "RR Ratio": TP is a multiple of the structural SL distance. "Pips": fixed pip distances independent of structure.',
+  },
+  short_rr_ratio: {
+    label: 'Short RR Ratio',
+    description: 'Take-profit distance for short trades = this × stop-loss distance.',
+  },
+  short_sl_pips: {
+    label: 'Short SL (pips)',
+    description: 'Fixed stop-loss distance for short trades, in pips from close.',
+  },
+  short_tp_pips: {
+    label: 'Short TP (pips)',
+    description: 'Fixed take-profit distance for short trades, in pips from close.',
+  },
+  long_sl_mode: {
+    label: 'Long SL Mode',
+    description: 'Structural stop-loss placement for long trades. "Swing Midpoint": midpoint between the swing high and the pullback low. "Swing Point": at the pullback low itself. "Signal Candle": low of the signal bar. "Structure": last Higher Low.',
+  },
+  short_sl_mode: {
+    label: 'Short SL Mode',
+    description: 'Structural stop-loss placement for short trades. "Swing Midpoint": midpoint between the swing low and the bounce high. "Swing Point": at the bounce high itself. "Signal Candle": high of the signal bar. "Structure": last Lower High.',
+  },
+  long_sl_mult: {
+    label: 'Long SL Multiplier',
+    description: 'Stop-loss distance for long trades = this × momentum candle range from the candle high. 1.0 → SL at candle low.',
+  },
+  long_tp_mult: {
+    label: 'Long TP Multiplier',
+    description: 'Take-profit distance for long trades = this × momentum candle range from the candle low. 1.0 → TP at candle high.',
+  },
+  short_sl_mult: {
+    label: 'Short SL Multiplier',
+    description: 'Stop-loss distance for short trades = this × momentum candle range from the candle low. 1.0 → SL at candle high.',
+  },
+  short_tp_mult: {
+    label: 'Short TP Multiplier',
+    description: 'Take-profit distance for short trades = this × momentum candle range from the candle high. 1.0 → TP at candle low.',
+  },
+  long_sl_pct: {
+    label: 'Long SL (%)',
+    description: 'Stop-loss as a percentage of anchor price for long trades.',
+  },
+  long_tp_pct: {
+    label: 'Long TP (%)',
+    description: 'Take-profit as a percentage of anchor price for long trades.',
+  },
+  short_sl_pct: {
+    label: 'Short SL (%)',
+    description: 'Stop-loss as a percentage of anchor price for short trades.',
+  },
+  short_tp_pct: {
+    label: 'Short TP (%)',
+    description: 'Take-profit as a percentage of anchor price for short trades.',
+  },
+  long_atr_sl_mult: {
+    label: 'Long ATR SL ×',
+    description: 'Stop-loss for long trades = this × ATR from anchor. Adapts to current volatility.',
+  },
+  long_atr_tp_mult: {
+    label: 'Long ATR TP ×',
+    description: 'Take-profit for long trades = this × ATR from anchor. Set higher than SL for positive RR.',
+  },
+  short_atr_sl_mult: {
+    label: 'Short ATR SL ×',
+    description: 'Stop-loss for short trades = this × ATR from anchor.',
+  },
+  short_atr_tp_mult: {
+    label: 'Short ATR TP ×',
+    description: 'Take-profit for short trades = this × ATR from anchor.',
+  },
   sl_pct: {
     label: 'Stop-Loss (%)',
     description:
@@ -440,7 +535,17 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
   william_fractals: [
     {
       title: 'Signal Generation',
-      params: ['ema_filter_mode', 'ema_period', 'ema_fast_period', 'ema_timeframe', 'fractal_n', 'rr_ratio'],
+      params: [
+        'ema_filter_mode', 'ema_period', 'ema_fast_period', 'ema_timeframe', 'fractal_n',
+      ],
+    },
+    {
+      title: 'Trade Direction & SL/TP',
+      params: [
+        'trade_direction',
+        'long_sl_tp_mode', 'long_rr_ratio', 'long_sl_pips', 'long_tp_pips',
+        'short_sl_tp_mode', 'short_rr_ratio', 'short_sl_pips', 'short_tp_pips',
+      ],
     },
     {
       title: 'Session Filter',
@@ -507,7 +612,17 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
   n_structure: [
     {
       title: 'Signal Generation',
-      params: ['ema_filter_mode', 'ema_period', 'ema_fast_period', 'ema_timeframe', 'swing_n_before', 'swing_n_after', 'sl_tp_mode', 'rr_ratio', 'sl_mode', 'sl_pips', 'tp_pips'],
+      params: [
+        'ema_filter_mode', 'ema_period', 'ema_fast_period', 'ema_timeframe', 'swing_n_before', 'swing_n_after',
+      ],
+    },
+    {
+      title: 'Trade Direction & SL/TP',
+      params: [
+        'trade_direction',
+        'long_sl_tp_mode', 'long_rr_ratio', 'long_sl_mode', 'long_sl_pips', 'long_tp_pips',
+        'short_sl_tp_mode', 'short_rr_ratio', 'short_sl_mode', 'short_sl_pips', 'short_tp_pips',
+      ],
     },
     {
       title: 'Pending Order',
@@ -568,8 +683,16 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
       params: ['ema_filter_mode', 'ema_period', 'ema_fast_period', 'ema_timeframe', 'body_ratio_min', 'volume_factor', 'volume_lookback'],
     },
     {
-      title: 'Entry & Exit',
-      params: ['retracement_pct', 'sl_mult', 'tp_mult', 'max_pending_bars'],
+      title: 'Entry',
+      params: ['retracement_pct', 'max_pending_bars'],
+    },
+    {
+      title: 'Trade Direction & SL/TP',
+      params: [
+        'trade_direction',
+        'long_sl_tp_mode', 'long_sl_mult', 'long_tp_mult', 'long_sl_pips', 'long_tp_pips',
+        'short_sl_tp_mode', 'short_sl_mult', 'short_tp_mult', 'short_sl_pips', 'short_tp_pips',
+      ],
     },
     {
       title: 'Session Filter',
@@ -619,7 +742,19 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
   pip_breakout: [
     {
       title: 'Signal Generation',
-      params: ['level_detector', 'lookback_bars', 'fractal_n_before', 'fractal_n_after', 'sl_tp_mode', 'sl_pips', 'tp_pips', 'sl_pct', 'tp_pct', 'atr_period', 'atr_sl_mult', 'atr_tp_mult', 'entry_mode', 'entry_offset_pips'],
+      params: [
+        'level_detector', 'lookback_bars', 'fractal_n_before', 'fractal_n_after',
+        'entry_mode', 'entry_offset_pips',
+      ],
+    },
+    {
+      title: 'Trade Direction & SL/TP',
+      params: [
+        'trade_direction',
+        'long_sl_tp_mode', 'long_sl_pips', 'long_tp_pips', 'long_sl_pct', 'long_tp_pct', 'long_atr_sl_mult', 'long_atr_tp_mult',
+        'short_sl_tp_mode', 'short_sl_pips', 'short_tp_pips', 'short_sl_pct', 'short_tp_pct', 'short_atr_sl_mult', 'short_atr_tp_mult',
+        'atr_period',
+      ],
     },
     {
       title: 'Pending Order',
@@ -648,7 +783,17 @@ const PARAM_GROUPS: Record<string, ParamGroup[]> = {
   breakout_strategy: [
     {
       title: 'Signal Generation',
-      params: ['swing_n_before', 'swing_n_after', 'rr_ratio', 'sl_mode'],
+      params: [
+        'swing_n_before', 'swing_n_after',
+      ],
+    },
+    {
+      title: 'Trade Direction & SL/TP',
+      params: [
+        'trade_direction',
+        'long_sl_tp_mode', 'long_rr_ratio', 'long_sl_mode', 'long_sl_pips', 'long_tp_pips',
+        'short_sl_tp_mode', 'short_rr_ratio', 'short_sl_mode', 'short_sl_pips', 'short_tp_pips',
+      ],
     },
     {
       title: 'EMA Trend Filter',
@@ -742,6 +887,37 @@ const OPTION_LABELS: Record<string, Record<string, string>> = {
     rr:   'RR Ratio — TP as multiple of SL distance',
     pips: 'Pips — fixed pip distance',
     pct:  '% of price — scales with entry level',
+  },
+  trade_direction: {
+    both:        'Both — buy and sell signals',
+    long_only:   'Long only — buy signals only',
+    short_only:  'Short only — sell signals only',
+  },
+  long_sl_tp_mode: {
+    rr:     'RR Ratio — TP as multiple of SL distance',
+    pips:   'Pips — fixed pip distance',
+    candle: 'Candle — multiple of momentum candle range',
+    pct:    '% of price — scales with entry level',
+    atr:    'ATR — adapts to current volatility',
+  },
+  short_sl_tp_mode: {
+    rr:     'RR Ratio — TP as multiple of SL distance',
+    pips:   'Pips — fixed pip distance',
+    candle: 'Candle — multiple of momentum candle range',
+    pct:    '% of price — scales with entry level',
+    atr:    'ATR — adapts to current volatility',
+  },
+  long_sl_mode: {
+    swing_midpoint: 'Swing Midpoint — (H1 + HL) / 2',
+    swing_point:    'Swing Point — at the pullback level (HL)',
+    signal_candle:  'Signal Candle — low of signal bar',
+    structure:      'Structure — last Higher Low',
+  },
+  short_sl_mode: {
+    swing_midpoint: 'Swing Midpoint — (L1 + LH) / 2',
+    swing_point:    'Swing Point — at the bounce level (LH)',
+    signal_candle:  'Signal Candle — high of signal bar',
+    structure:      'Structure — last Lower High',
   },
   ema_filter_mode: {
     none:   'None — no filter, both directions',
@@ -1411,6 +1587,9 @@ export function BacktestForm({ onResult, initialParams }: Props) {
           const emaFilterMode = (stratParams['ema_filter_mode'] ?? 'dual') as string;
           const slTpMode = (stratParams['sl_tp_mode'] ?? 'pips') as string;
           const levelDetector = (stratParams['level_detector'] ?? 'rolling') as string;
+          const tradeDirection = (stratParams['trade_direction'] ?? 'both') as string;
+          const longSlTpMode = (stratParams['long_sl_tp_mode'] ?? 'rr') as string;
+          const shortSlTpMode = (stratParams['short_sl_tp_mode'] ?? 'rr') as string;
 
           const isVisible = (name: string): boolean => {
             if (name.startsWith('adx_'))        return currentFilter === 'adx';
@@ -1439,7 +1618,37 @@ export function BacktestForm({ onResult, initialParams }: Props) {
               if ('sl_tp_mode' in stratParams) return slTpMode === 'pips';
             }
             if (name === 'sl_pct' || name === 'tp_pct') return slTpMode === 'pct';
+            // atr_period for pip_breakout (per-direction mode) must come before generic atr_ check
+            if (name === 'atr_period' && 'long_sl_tp_mode' in stratParams)
+                                              return longSlTpMode === 'atr' || shortSlTpMode === 'atr';
             if (name.startsWith('atr_'))              return slTpMode === 'atr';
+            // per-direction SL/TP (william_fractals)
+            if (name === 'long_sl_tp_mode') return tradeDirection !== 'short_only';
+            if (name === 'long_rr_ratio')   return tradeDirection !== 'short_only' && longSlTpMode === 'rr';
+            if (name === 'long_sl_pips' || name === 'long_tp_pips')
+                                            return tradeDirection !== 'short_only' && longSlTpMode === 'pips';
+            if (name === 'short_sl_tp_mode') return tradeDirection !== 'long_only';
+            if (name === 'short_rr_ratio')   return tradeDirection !== 'long_only' && shortSlTpMode === 'rr';
+            if (name === 'short_sl_pips' || name === 'short_tp_pips')
+                                             return tradeDirection !== 'long_only' && shortSlTpMode === 'pips';
+            // per-direction SL mode (n_structure, breakout_strategy)
+            if (name === 'long_sl_mode')  return tradeDirection !== 'short_only' && longSlTpMode === 'rr';
+            if (name === 'short_sl_mode') return tradeDirection !== 'long_only'  && shortSlTpMode === 'rr';
+            // per-direction candle mult (momentum_candle)
+            if (name === 'long_sl_mult'  || name === 'long_tp_mult')
+                                          return tradeDirection !== 'short_only' && longSlTpMode === 'candle';
+            if (name === 'short_sl_mult' || name === 'short_tp_mult')
+                                          return tradeDirection !== 'long_only'  && shortSlTpMode === 'candle';
+            // per-direction pct (pip_breakout)
+            if (name === 'long_sl_pct'  || name === 'long_tp_pct')
+                                          return tradeDirection !== 'short_only' && longSlTpMode === 'pct';
+            if (name === 'short_sl_pct' || name === 'short_tp_pct')
+                                          return tradeDirection !== 'long_only'  && shortSlTpMode === 'pct';
+            // per-direction ATR (pip_breakout)
+            if (name === 'long_atr_sl_mult'  || name === 'long_atr_tp_mult')
+                                          return tradeDirection !== 'short_only' && longSlTpMode === 'atr';
+            if (name === 'short_atr_sl_mult' || name === 'short_atr_tp_mult')
+                                          return tradeDirection !== 'long_only'  && shortSlTpMode === 'atr';
             if (name === 'pending_cancel_buffer_pips') {
               const pc = (stratParams['pending_cancel'] ?? 'max_bars') as string;
               return pc === 'sl_break' || pc === 'both';

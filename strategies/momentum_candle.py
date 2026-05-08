@@ -56,6 +56,16 @@ from strategies.base import BaseStrategy
 
 _DATA_DIR = Path(__file__).parent.parent / "data" / "parquet" / "ohlcv"
 
+_PIP_MULT: dict[str, float] = {
+    "XAUUSD": 10.0,
+    "XAGUSD": 100.0,
+    "BTCUSD": 1.0,  "ETHUSD": 1.0,  "USTEC": 1.0,
+    "EURUSD": 10_000.0, "GBPUSD": 10_000.0,
+    "EURJPY": 100.0, "GBPJPY": 100.0, "USDJPY": 100.0,
+    "AUDJPY": 100.0, "CADJPY": 100.0, "CHFJPY": 100.0,
+    "EURGBP": 10_000.0,
+}
+
 
 class MomentumCandleStrategy(BaseStrategy):
     name = "momentum_candle"
@@ -71,8 +81,19 @@ class MomentumCandleStrategy(BaseStrategy):
         volume_factor: float = 1.5,
         volume_lookback: int = 23,
         retracement_pct: float = 0.50,
-        sl_mult: float = 1.0,
-        tp_mult: float = 1.0,
+        trade_direction: str = "both",
+        # Long (buy) SL/TP
+        long_sl_tp_mode: str = "candle",   # candle | pips
+        long_sl_mult: float = 1.0,
+        long_tp_mult: float = 1.0,
+        long_sl_pips: float = 200.0,
+        long_tp_pips: float = 400.0,
+        # Short (sell) SL/TP
+        short_sl_tp_mode: str = "candle",
+        short_sl_mult: float = 1.0,
+        short_tp_mult: float = 1.0,
+        short_sl_pips: float = 200.0,
+        short_tp_pips: float = 400.0,
         sessions: str = "all",
         # Sideways filter
         sideways_filter: str = "none",
@@ -104,8 +125,18 @@ class MomentumCandleStrategy(BaseStrategy):
         self.volume_factor = volume_factor
         self.volume_lookback = volume_lookback
         self.retracement_pct = retracement_pct
-        self.sl_mult = sl_mult
-        self.tp_mult = tp_mult
+        self.pip_mult = _PIP_MULT.get(symbol, 10.0)
+        self.trade_direction = trade_direction
+        self.long_sl_tp_mode = long_sl_tp_mode
+        self.long_sl_mult = long_sl_mult
+        self.long_tp_mult = long_tp_mult
+        self.long_sl_pips = long_sl_pips
+        self.long_tp_pips = long_tp_pips
+        self.short_sl_tp_mode = short_sl_tp_mode
+        self.short_sl_mult = short_sl_mult
+        self.short_tp_mult = short_tp_mult
+        self.short_sl_pips = short_sl_pips
+        self.short_tp_pips = short_tp_pips
         self.sessions = sessions
         self.sideways_filter = sideways_filter
         self.adx_period = adx_period
@@ -166,6 +197,11 @@ class MomentumCandleStrategy(BaseStrategy):
             ema_ok_long  = pl.lit(True)
             ema_ok_short = pl.lit(True)
 
+        if self.trade_direction == "short_only":
+            ema_ok_long = pl.lit(False)
+        elif self.trade_direction == "long_only":
+            ema_ok_short = pl.lit(False)
+
         # Momentum candle flag (direction-agnostic)
         is_mc = (
             (pl.col("_body_ratio") >= self.body_ratio_min)
@@ -195,21 +231,32 @@ class MomentumCandleStrategy(BaseStrategy):
             .otherwise(None)
             .alias("entry_limit")
         )
-        # SL: sl_mult × range from the opposite extreme in signal direction
-        #   BUY:  mc_high - sl_mult * range  (default 1.0 → mc_low)
-        #   SELL: mc_low  + sl_mult * range  (default 1.0 → mc_high)
+
+        # Long SL/TP
+        if self.long_sl_tp_mode == "pips":
+            sl_buy = (pl.col("high") - r * candle_range) - self.long_sl_pips / self.pip_mult
+            tp_buy = (pl.col("high") - r * candle_range) + self.long_tp_pips / self.pip_mult
+        else:  # candle
+            sl_buy = pl.col("high") - self.long_sl_mult * candle_range
+            tp_buy = pl.col("low")  + self.long_tp_mult * candle_range
+
+        # Short SL/TP
+        if self.short_sl_tp_mode == "pips":
+            sl_sell = (pl.col("low") + r * candle_range) + self.short_sl_pips / self.pip_mult
+            tp_sell = (pl.col("low") + r * candle_range) - self.short_tp_pips / self.pip_mult
+        else:  # candle
+            sl_sell = pl.col("low")  + self.short_sl_mult * candle_range
+            tp_sell = pl.col("high") - self.short_tp_mult * candle_range
+
         sl = (
-            pl.when(buy_cond).then(pl.col("high") - self.sl_mult * candle_range)
-            .when(sell_cond).then(pl.col("low")   + self.sl_mult * candle_range)
+            pl.when(buy_cond).then(sl_buy)
+            .when(sell_cond).then(sl_sell)
             .otherwise(None)
             .alias("sl")
         )
-        # TP: tp_mult × range from the near extreme in signal direction
-        #   BUY:  mc_low  + tp_mult * range  (default 1.0 → mc_high)
-        #   SELL: mc_high - tp_mult * range  (default 1.0 → mc_low)
         tp = (
-            pl.when(buy_cond).then(pl.col("low")  + self.tp_mult * candle_range)
-            .when(sell_cond).then(pl.col("high")  - self.tp_mult * candle_range)
+            pl.when(buy_cond).then(tp_buy)
+            .when(sell_cond).then(tp_sell)
             .otherwise(None)
             .alias("tp")
         )

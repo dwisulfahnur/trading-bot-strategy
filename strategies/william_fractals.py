@@ -32,6 +32,16 @@ from strategies.base import BaseStrategy
 
 _DATA_DIR = Path(__file__).parent.parent / "data" / "parquet" / "ohlcv"
 
+_PIP_MULT: dict[str, float] = {
+    "XAUUSD": 10.0,
+    "XAGUSD": 100.0,
+    "BTCUSD": 1.0,  "ETHUSD": 1.0,  "USTEC": 1.0,
+    "EURUSD": 10_000.0, "GBPUSD": 10_000.0,
+    "EURJPY": 100.0, "GBPJPY": 100.0, "USDJPY": 100.0,
+    "AUDJPY": 100.0, "CADJPY": 100.0, "CHFJPY": 100.0,
+    "EURGBP": 10_000.0,
+}
+
 
 class WilliamFractalsStrategy(BaseStrategy):
     name = "william_fractals"
@@ -44,7 +54,17 @@ class WilliamFractalsStrategy(BaseStrategy):
         ema_filter_mode: str = "single",
         symbol: str = "XAUUSD",
         fractal_n: int = 9,
-        rr_ratio: float = 1.5,
+        trade_direction: str = "both",
+        # Long (buy) SL/TP
+        long_sl_tp_mode: str = "rr",
+        long_rr_ratio: float = 1.5,
+        long_sl_pips: float = 200.0,
+        long_tp_pips: float = 400.0,
+        # Short (sell) SL/TP
+        short_sl_tp_mode: str = "rr",
+        short_rr_ratio: float = 1.5,
+        short_sl_pips: float = 200.0,
+        short_tp_pips: float = 400.0,
         # Market session filter
         sessions: str = "all",
         # Momentum candle filter
@@ -78,8 +98,17 @@ class WilliamFractalsStrategy(BaseStrategy):
         self.ema_timeframe = ema_timeframe
         self.ema_filter_mode = ema_filter_mode
         self.symbol = symbol
+        self.pip_mult = _PIP_MULT.get(symbol, 10.0)
         self.fractal_n = fractal_n
-        self.rr_ratio = rr_ratio
+        self.trade_direction = trade_direction
+        self.long_sl_tp_mode = long_sl_tp_mode
+        self.long_rr_ratio = long_rr_ratio
+        self.long_sl_pips = long_sl_pips
+        self.long_tp_pips = long_tp_pips
+        self.short_sl_tp_mode = short_sl_tp_mode
+        self.short_rr_ratio = short_rr_ratio
+        self.short_sl_pips = short_sl_pips
+        self.short_tp_pips = short_tp_pips
         self.sessions = sessions
         self.momentum_candle_filter = momentum_candle_filter
         self.mc_body_ratio_min = mc_body_ratio_min
@@ -198,8 +227,6 @@ class WilliamFractalsStrategy(BaseStrategy):
         return pl.when(confirmed).then(pl.col("low").shift(n)).otherwise(None)
 
     def _signals(self) -> list[pl.Expr]:
-        rr = self.rr_ratio
-
         if self.ema_filter_mode == "dual":
             in_uptrend   = pl.col("_ema_fast") > pl.col("ema")
             in_downtrend = pl.col("_ema_fast") < pl.col("ema")
@@ -209,6 +236,12 @@ class WilliamFractalsStrategy(BaseStrategy):
         else:  # "none"
             in_uptrend   = pl.lit(True)
             in_downtrend = pl.lit(True)
+
+        # Direction gate — block the disabled side entirely
+        if self.trade_direction == "short_only":
+            in_uptrend = pl.lit(False)
+        elif self.trade_direction == "long_only":
+            in_downtrend = pl.lit(False)
 
         buy_breakout = (
             pl.col("close") > pl.col("last_top")
@@ -238,11 +271,21 @@ class WilliamFractalsStrategy(BaseStrategy):
             .alias("signal")
         )
 
-        sl_buy = pl.col("low")
-        tp_buy = pl.col("close") + rr * (pl.col("close") - pl.col("low"))
+        # Long SL/TP
+        if self.long_sl_tp_mode == "pips":
+            sl_buy = pl.col("close") - self.long_sl_pips / self.pip_mult
+            tp_buy = pl.col("close") + self.long_tp_pips / self.pip_mult
+        else:  # rr
+            sl_buy = pl.col("low")
+            tp_buy = pl.col("close") + self.long_rr_ratio * (pl.col("close") - pl.col("low"))
 
-        sl_sell = pl.col("high")
-        tp_sell = pl.col("close") - rr * (pl.col("high") - pl.col("close"))
+        # Short SL/TP
+        if self.short_sl_tp_mode == "pips":
+            sl_sell = pl.col("close") + self.short_sl_pips / self.pip_mult
+            tp_sell = pl.col("close") - self.short_tp_pips / self.pip_mult
+        else:  # rr
+            sl_sell = pl.col("high")
+            tp_sell = pl.col("close") - self.short_rr_ratio * (pl.col("high") - pl.col("close"))
 
         sl = (
             pl.when(buy_cond).then(sl_buy)

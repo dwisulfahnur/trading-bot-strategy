@@ -632,9 +632,20 @@ def _prompt_william_fractals(
     params: dict, lang: str, mt_ver: str,
     perf: str, param_lines_str: str,
 ) -> str:
-    rr           = params.get("rr_ratio", 1.5)
-    ema_p        = params.get("ema_period", 200)
-    fractal_n    = params.get("fractal_n", 9)
+    from backtest import PAIR_CONFIG
+    symbol           = params.get("symbol", "XAUUSD")
+    pip_mult         = PAIR_CONFIG.get(symbol, PAIR_CONFIG["XAUUSD"])["pip_mult"]
+    ema_p            = params.get("ema_period", 200)
+    fractal_n        = params.get("fractal_n", 9)
+    trade_direction  = params.get("trade_direction", "both")
+    long_sl_tp_mode  = params.get("long_sl_tp_mode", "rr")
+    long_rr          = float(params.get("long_rr_ratio", 1.5))
+    long_sl_pips     = float(params.get("long_sl_pips", 200.0))
+    long_tp_pips     = float(params.get("long_tp_pips", 400.0))
+    short_sl_tp_mode = params.get("short_sl_tp_mode", "rr")
+    short_rr         = float(params.get("short_rr_ratio", 1.5))
+    short_sl_pips    = float(params.get("short_sl_pips", 200.0))
+    short_tp_pips    = float(params.get("short_tp_pips", 400.0))
     sessions     = params.get("sessions", "all")
     mc_on        = bool(params.get("momentum_candle_filter", False))
     mc_body      = params.get("mc_body_ratio_min", 0.6)
@@ -645,6 +656,35 @@ def _prompt_william_fractals(
     session_sec  = _session_filter_section(sessions)
 
     risk_mgmt_line = _risk_input_group_line(params)
+
+    # Direction note
+    _dir_note_wf = {
+        "long_only":  "\n> **Trade Direction**: LONG ONLY — only BUY signals are generated; skip all SELL logic.\n",
+        "short_only": "\n> **Trade Direction**: SHORT ONLY — only SELL signals are generated; skip all BUY logic.\n",
+    }.get(trade_direction, "")
+
+    # Per-direction SL/TP code strings
+    if long_sl_tp_mode == "pips":
+        _buy_sl_code = (
+            f"double sl = NormalizeDouble(close[1] - {long_sl_pips:g} / {pip_mult:g}, _Digits);\n"
+            f"double tp = NormalizeDouble(close[1] + {long_tp_pips:g} / {pip_mult:g}, _Digits);"
+        )
+    else:  # rr
+        _buy_sl_code = (
+            f"double sl = low[1];\n"
+            f"double tp = NormalizeDouble(close[1] + {long_rr:g} * (close[1] - sl), _Digits);"
+        )
+
+    if short_sl_tp_mode == "pips":
+        _sell_sl_code = (
+            f"double sl = NormalizeDouble(close[1] + {short_sl_pips:g} / {pip_mult:g}, _Digits);\n"
+            f"double tp = NormalizeDouble(close[1] - {short_tp_pips:g} / {pip_mult:g}, _Digits);"
+        )
+    else:  # rr
+        _sell_sl_code = (
+            f"double sl = high[1];\n"
+            f"double tp = NormalizeDouble(close[1] - {short_rr:g} * (sl - close[1]), _Digits);"
+        )
 
     mc_section = ""
     if mc_on:
@@ -674,7 +714,8 @@ Skip signal if the momentum candle condition is not met.
 ## Input Groups
 
 Group all `input` variables under labelled sections using `input group "..."` (MQL5) or string separator inputs (MQL4):
-- `"=== Signal Generation ==="` — ema_period, fractal_n, rr_ratio
+- `"=== Signal Generation ==="` — ema_period, fractal_n
+- `"=== Trade Direction & SL/TP ==="` — trade_direction, long_sl_tp_mode (long_rr_ratio/long_sl_pips/long_tp_pips), short_sl_tp_mode (short_rr_ratio/short_sl_pips/short_tp_pips)
 - `"=== Session Filter ==="` — sessions (display label)
 - `"=== Momentum Candle Filter ==="` — momentum_candle_filter, mc_body_ratio_min, mc_volume_factor, mc_volume_lookback
 - `"=== Sideways Filter ==="` — sideways_filter and its sub-parameters
@@ -734,7 +775,7 @@ bool in_downtrend = (close[1] < ema1);
 {filter_desc}
 
 ### Step 7 — {("Momentum candle gate" if mc_on else "Signal detection")}
-{mc_section if mc_on else ""}
+{_dir_note_wf}{mc_section if mc_on else ""}
 **BUY signal** conditions on bar[1]:
 - `in_uptrend` AND `g_last_top > 0` AND `close[1] > g_last_top` AND `close[2] <= g_last_top`
 - Sideways filter: long allowed
@@ -753,10 +794,9 @@ Before placing any order, verify the period SL count is within limit (see Risk M
 ### Step 9 — Order placement
 Pre-compute SL and TP from the signal bar values (not from entry price):
 
-**BUY:**
+**BUY** (long SL/TP mode: `{long_sl_tp_mode}`):
 ```
-double sl = low[1];
-double tp = close[1] + {rr} * (close[1] - sl);
+{_buy_sl_code}
 double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 // Guard: ask > sl AND tp > ask
 double lots = ComputeLots(ask, sl);
@@ -764,10 +804,9 @@ trade.Buy(lots, _Symbol, ask, sl, tp, "WF_BUY");
 g_last_top_used = g_last_top;
 ```
 
-**SELL:**
+**SELL** (short SL/TP mode: `{short_sl_tp_mode}`):
 ```
-double sl = high[1];
-double tp = close[1] - {rr} * (sl - close[1]);
+{_sell_sl_code}
 double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 // Guard: bid < sl AND tp < bid
 double lots = ComputeLots(bid, sl);
@@ -796,12 +835,24 @@ def _prompt_momentum_candle(
     params: dict, lang: str, mt_ver: str,
     perf: str, param_lines_str: str,
 ) -> str:
+    from backtest import PAIR_CONFIG
+    symbol           = params.get("symbol", "XAUUSD")
+    pip_mult         = PAIR_CONFIG.get(symbol, PAIR_CONFIG["XAUUSD"])["pip_mult"]
     body_ratio       = params.get("body_ratio_min", 0.70)
     vol_factor       = params.get("volume_factor", 1.5)
     vol_lookback     = int(params.get("volume_lookback", 23))
     retracement_pct  = params.get("retracement_pct", 0.50)
-    sl_mult          = params.get("sl_mult", 1.0)
-    tp_mult          = params.get("tp_mult", 1.0)
+    trade_direction  = params.get("trade_direction", "both")
+    long_sl_tp_mode  = params.get("long_sl_tp_mode", "candle")
+    long_sl_mult     = float(params.get("long_sl_mult", 1.0))
+    long_tp_mult     = float(params.get("long_tp_mult", 1.0))
+    long_sl_pips     = float(params.get("long_sl_pips", 200.0))
+    long_tp_pips     = float(params.get("long_tp_pips", 400.0))
+    short_sl_tp_mode = params.get("short_sl_tp_mode", "candle")
+    short_sl_mult    = float(params.get("short_sl_mult", 1.0))
+    short_tp_mult    = float(params.get("short_tp_mult", 1.0))
+    short_sl_pips    = float(params.get("short_sl_pips", 200.0))
+    short_tp_pips    = float(params.get("short_tp_pips", 400.0))
     max_pending_bars = int(params.get("max_pending_bars", 5))
     sessions         = params.get("sessions", "all")
     ema_mode         = params.get("ema_filter_mode", "single")
@@ -810,6 +861,27 @@ def _prompt_momentum_candle(
     session_sec      = _session_filter_section(sessions)
     filter_desc      = _sideways_filter_desc(params)
     risk_mgmt_line   = _risk_input_group_line(params)
+
+    # Direction note
+    _dir_note_mc = {
+        "long_only":  "\n> **Trade Direction**: LONG ONLY — only bullish MC (BUY limit) signals; skip bearish MC.\n",
+        "short_only": "\n> **Trade Direction**: SHORT ONLY — only bearish MC (SELL limit) signals; skip bullish MC.\n",
+    }.get(trade_direction, "")
+
+    # Per-direction SL/TP code strings for Step 9
+    if long_sl_tp_mode == "pips":
+        _buy_limit_sl = f"NormalizeDouble(limit_price - {long_sl_pips:g} / {pip_mult:g}, digits)"
+        _buy_limit_tp = f"NormalizeDouble(limit_price + {long_tp_pips:g} / {pip_mult:g}, digits)"
+    else:  # candle
+        _buy_limit_sl = f"NormalizeDouble(mc_high - {long_sl_mult:g} * range, digits)"
+        _buy_limit_tp = f"NormalizeDouble(mc_low  + {long_tp_mult:g} * range, digits)"
+
+    if short_sl_tp_mode == "pips":
+        _sell_limit_sl = f"NormalizeDouble(limit_price + {short_sl_pips:g} / {pip_mult:g}, digits)"
+        _sell_limit_tp = f"NormalizeDouble(limit_price - {short_tp_pips:g} / {pip_mult:g}, digits)"
+    else:  # candle
+        _sell_limit_sl = f"NormalizeDouble(mc_low  + {short_sl_mult:g} * range, digits)"
+        _sell_limit_tp = f"NormalizeDouble(mc_high - {short_tp_mult:g} * range, digits)"
 
     ema_g_decls, ema_init_code, ema_copy_code = _ema_init_block(params)
 
@@ -855,7 +927,8 @@ def _prompt_momentum_candle(
 Group all `input` variables using `input group "..."` (MQL5) or string separator inputs (MQL4):
 - `"=== Trend Filter ==="` — ema_filter_mode, ema_period{ema_dual_extra}, ema_timeframe
 - `"=== Momentum Candle ==="` — body_ratio_min, volume_factor, volume_lookback
-- `"=== Entry & Exit ==="` — retracement_pct, sl_mult, tp_mult, max_pending_bars
+- `"=== Entry ==="` — retracement_pct, max_pending_bars
+- `"=== Trade Direction & SL/TP ==="` — trade_direction, long_sl_tp_mode (long_sl_mult/long_tp_mult/long_sl_pips/long_tp_pips), short_sl_tp_mode (short_sl_mult/short_tp_mult/short_sl_pips/short_tp_pips)
 - `"=== Session Filter ==="` — sessions (display label)
 - `"=== Sideways Filter ==="` — sideways_filter and sub-parameters
 {risk_mgmt_line}
@@ -930,7 +1003,7 @@ Momentum candle conditions:
 - `tick_volume[1] > avg_vol * {vol_factor}`
 
 Signal direction (apply EMA filter from Step 5):
-{ema_signal_logic}
+{_dir_note_mc}{ema_signal_logic}
 - Neither → return
 
 ### Step 7 — Sideways filter
@@ -944,19 +1017,19 @@ Before placing any order, verify the period SL count is within limit (see Risk M
 mc_high = high[1];   mc_low = low[1];   range = mc_high - mc_low;
 ```
 
-**BUY LIMIT:**
+**BUY LIMIT** (long SL/TP mode: `{long_sl_tp_mode}`):
 ```
 limit_price = NormalizeDouble(mc_high - {retracement_pct} * range, digits)
-sl          = NormalizeDouble(mc_high - {sl_mult} * range, digits)
-tp          = NormalizeDouble(mc_low  + {tp_mult} * range, digits)
+sl          = {_buy_limit_sl}
+tp          = {_buy_limit_tp}
 sl_distance = limit_price - sl
 ```
 
-**SELL LIMIT:**
+**SELL LIMIT** (short SL/TP mode: `{short_sl_tp_mode}`):
 ```
 limit_price = NormalizeDouble(mc_low  + {retracement_pct} * range, digits)
-sl          = NormalizeDouble(mc_low  + {sl_mult} * range, digits)
-tp          = NormalizeDouble(mc_high - {tp_mult} * range, digits)
+sl          = {_sell_limit_sl}
+tp          = {_sell_limit_tp}
 sl_distance = sl - limit_price
 ```
 
@@ -1009,13 +1082,24 @@ def _prompt_n_structure(
     params: dict, lang: str, mt_ver: str,
     perf: str, param_lines_str: str,
 ) -> str:
+    from backtest import PAIR_CONFIG
+    symbol           = params.get("symbol", "XAUUSD")
+    pip_mult         = PAIR_CONFIG.get(symbol, PAIR_CONFIG["XAUUSD"])["pip_mult"]
     ema_p            = params.get("ema_period", 200)
     ema_tf           = params.get("ema_timeframe", "same")
     swing_n_before   = int(params.get("swing_n_before", 5))
     swing_n_after    = int(params.get("swing_n_after", 5))
-    rr               = params.get("rr_ratio", 2.0)
-    sl_mode          = params.get("sl_mode", "swing_midpoint")
-    sl_tp_mode       = params.get("sl_tp_mode", "rr")
+    trade_direction  = params.get("trade_direction", "both")
+    long_sl_tp_mode  = params.get("long_sl_tp_mode", "rr")
+    long_rr          = float(params.get("long_rr_ratio", 2.0))
+    long_sl_mode     = params.get("long_sl_mode", "swing_midpoint")
+    long_sl_pips     = float(params.get("long_sl_pips", 200.0))
+    long_tp_pips     = float(params.get("long_tp_pips", 400.0))
+    short_sl_tp_mode = params.get("short_sl_tp_mode", "rr")
+    short_rr         = float(params.get("short_rr_ratio", 2.0))
+    short_sl_mode    = params.get("short_sl_mode", "swing_midpoint")
+    short_sl_pips    = float(params.get("short_sl_pips", 200.0))
+    short_tp_pips    = float(params.get("short_tp_pips", 400.0))
     sessions         = params.get("sessions", "all")
     pending_cancel   = params.get("pending_cancel", "max_bars")
     max_pending_bars = int(params.get("max_pending_bars", 10))
@@ -1205,59 +1289,63 @@ SL is moved to **{be_target}**. Fires at most once per trade (`g_be_done` preven
         f"double ema1 = ema_buf[1];   // {ema_label}, aligned to bar[1]"
     )
 
-    # SL formula strings — computed from the stop-entry level and stored swing points
-    sl_long_formula, sl_short_formula = {
-        "swing_midpoint": (
-            "(g_last_sh + g_hl) / 2.0",
-            "(g_last_sl + g_lh) / 2.0",
-        ),
-        "swing_point": (
-            "g_hl",
-            "g_lh",
-        ),
-        "signal_candle": (
-            "low[1]",     # low of the HL-confirmation bar (bar where swing low was confirmed)
-            "high[1]",    # high of the LH-confirmation bar (bar where swing high was confirmed)
-        ),
-    }.get(sl_mode, ("low[1]", "high[1]"))
+    # Per-direction SL formula strings — computed from the stop-entry level and stored swing points
+    _sl_formulas = {
+        "swing_midpoint": ("(g_last_sh + g_hl) / 2.0", "(g_last_sl + g_lh) / 2.0"),
+        "swing_point":    ("g_hl", "g_lh"),
+        "signal_candle":  ("low[1]", "high[1]"),
+    }
+    long_sl_formula  = _sl_formulas.get(long_sl_mode,  ("low[1]",  "high[1]"))[0]
+    short_sl_formula = _sl_formulas.get(short_sl_mode, ("low[1]",  "high[1]"))[1]
 
-    sl_mode_desc = {
-        "swing_midpoint": "midpoint between the breakout level (H1/L1) and the pullback/bounce point (HL/LH)",
+    _sl_mode_descs = {
+        "swing_midpoint": "midpoint between the breakout level and the pullback/bounce point (HL/LH)",
         "swing_point":    "at the pullback low (HL) for longs / bounce high (LH) for shorts",
         "signal_candle":  "low of the HL-confirmation bar for longs / high of the LH-confirmation bar for shorts",
-    }.get(sl_mode, sl_mode)
+    }
+    long_sl_mode_desc  = _sl_mode_descs.get(long_sl_mode, long_sl_mode)
+    short_sl_mode_desc = _sl_mode_descs.get(short_sl_mode, short_sl_mode)
 
-    # SL/TP mode: pips — fixed pip distances override swing-based SL
-    if sl_tp_mode == "pips":
-        from backtest import PAIR_CONFIG
-        _symbol   = params.get("symbol", "XAUUSD")
-        _pip_mult = PAIR_CONFIG.get(_symbol, PAIR_CONFIG["XAUUSD"])["pip_mult"]
-        _sl_pips  = float(params.get("sl_pips", 200.0))
-        _tp_pips  = float(params.get("tp_pips", 400.0))
-        _step9_sl_tp = f"""**SL/TP mode: pips** — `sl_mode` and `rr_ratio` are ignored.
-Expose `InpPipMult` as `input double` (default **{_pip_mult:g}** for {_symbol}).
+    # Direction note
+    _dir_note_ns = {
+        "long_only":  "\n> **Trade Direction**: LONG ONLY — only BUY STOP orders; skip all SELL STOP logic.\n",
+        "short_only": "\n> **Trade Direction**: SHORT ONLY — only SELL STOP orders; skip all BUY STOP logic.\n",
+    }.get(trade_direction, "")
 
-```
-double sl_d = InpSlPips / InpPipMult;   // default {_sl_pips:g} pips → {_sl_pips / _pip_mult:g} price units
-double tp_d = InpTpPips / InpPipMult;   // default {_tp_pips:g} pips → {_tp_pips / _pip_mult:g} price units
-```
+    # Per-direction SL/TP step 9 section
+    if long_sl_tp_mode == "pips":
+        _buy_stop_sl_tp = (
+            f"**BUY STOP — pips mode** (sl_mode ignored):\n"
+            f"  `sl = NormalizeDouble(stop_price - {long_sl_pips:g} / {pip_mult:g}, _Digits)`\n"
+            f"  `tp = NormalizeDouble(stop_price + {long_tp_pips:g} / {pip_mult:g}, _Digits)`"
+        )
+    else:  # rr
+        _buy_stop_sl_tp = (
+            f"**BUY STOP — RR mode** (sl_mode: {long_sl_mode} — {long_sl_mode_desc}):\n"
+            f"  `sl = {long_sl_formula}`\n"
+            f"  `sl_dist = stop_price - sl`\n"
+            f"  `tp = NormalizeDouble(stop_price + {long_rr:g} * sl_dist, _Digits)`"
+        )
 
-Long:  `sl = stop_price - sl_d`,  `tp = stop_price + tp_d`
-Short: `sl = stop_price + sl_d`,  `tp = stop_price - tp_d`"""
-    else:
-        _step9_sl_tp = f"""**SL/TP mode: RR** — SL anchored to swing structure, TP = `stop_price ± {rr} × sl_dist`.
+    if short_sl_tp_mode == "pips":
+        _sell_stop_sl_tp = (
+            f"**SELL STOP — pips mode** (sl_mode ignored):\n"
+            f"  `sl = NormalizeDouble(stop_price + {short_sl_pips:g} / {pip_mult:g}, _Digits)`\n"
+            f"  `tp = NormalizeDouble(stop_price - {short_tp_pips:g} / {pip_mult:g}, _Digits)`"
+        )
+    else:  # rr
+        _sell_stop_sl_tp = (
+            f"**SELL STOP — RR mode** (sl_mode: {short_sl_mode} — {short_sl_mode_desc}):\n"
+            f"  `sl = {short_sl_formula}`\n"
+            f"  `sl_dist = sl - stop_price`\n"
+            f"  `tp = NormalizeDouble(stop_price - {short_rr:g} * sl_dist, _Digits)`"
+        )
 
-SL mode: **{sl_mode}** — {sl_mode_desc}.
+    _step9_sl_tp = f"""{_buy_stop_sl_tp}
 
-BUY STOP:
-  `sl = {sl_long_formula}`
-  `sl_dist = stop_price - sl`
-  `tp = stop_price + {rr} * sl_dist`
+{_sell_stop_sl_tp}
 
-SELL STOP:
-  `sl = {sl_short_formula}`
-  `sl_dist = sl - stop_price`
-  `tp = stop_price - {rr} * sl_dist`"""
+Expose `InpPipMult` as `input double` (default **{pip_mult:g}** for {symbol}) — required when either direction uses pips mode."""
 
     return f"""## Strategy: N Structure Breakout
 ## Platform: MetaTrader {mt_ver} ({lang})
@@ -1292,15 +1380,16 @@ placed at the breakout level the moment the structure is armed — no waiting fo
 Entry fills automatically when price reaches the stop level. SL and TP are anchored to the stop price
 (not the bar close), so the RR ratio is exact at fill.
 
-SL mode: **{sl_mode}** — {sl_mode_desc}.
-TP: `stop_price ± rr_ratio × (stop_price − SL)`.
-
+**Long SL/TP mode**: `{long_sl_tp_mode}` — {long_sl_mode_desc if long_sl_tp_mode == "rr" else f"fixed pips ({long_sl_pips:g} SL / {long_tp_pips:g} TP)"}
+**Short SL/TP mode**: `{short_sl_tp_mode}` — {short_sl_mode_desc if short_sl_tp_mode == "rr" else f"fixed pips ({short_sl_pips:g} SL / {short_tp_pips:g} TP)"}
+{_dir_note_ns}
 ---
 
 ## Input Groups
 
 Group all `input` variables using `input group "..."` (MQL5) or string separator inputs (MQL4):
-- `"=== Signal Generation ==="` — ema_period, ema_timeframe, swing_n_before, swing_n_after, rr_ratio, sl_mode
+- `"=== Signal Generation ==="` — ema_period, ema_timeframe, swing_n_before, swing_n_after
+- `"=== Trade Direction & SL/TP ==="` — trade_direction, long_sl_tp_mode (long_rr_ratio/long_sl_mode/long_sl_pips/long_tp_pips), short_sl_tp_mode (short_rr_ratio/short_sl_mode/short_sl_pips/short_tp_pips)
 - `"=== Pending Order ==="` — pending_cancel, max_pending_bars (only relevant when cancel mode uses bar expiry)
 - `"=== Session Filter ==="` — sessions (display label)
 - `"=== Sideways Filter ==="` — sideways_filter and its sub-parameters
@@ -1440,7 +1529,7 @@ bool in_downtrend = (close[1] < ema1);
 {filter_desc}
 
 ### Step 7 — Arm structure: place pending stop orders
-
+{_dir_note_ns}
 **Arm BUY STOP** — all of the following must be true:
 - `sl_just_fired` (HL was confirmed this bar)
 - `g_last_sh > 0.0` (have a confirmed H1)
@@ -1812,18 +1901,27 @@ def _prompt_pip_breakout(
     symbol          = params.get("symbol", "XAUUSD")
     pip_mult        = PAIR_CONFIG.get(symbol, PAIR_CONFIG["XAUUSD"])["pip_mult"]
 
-    level_detector  = params.get("level_detector", "rolling")
-    lookback        = int(params.get("lookback_bars", 20))
-    frac_n_before   = int(params.get("fractal_n_before", 5))
-    frac_n_after    = int(params.get("fractal_n_after", 5))
+    level_detector   = params.get("level_detector", "rolling")
+    lookback         = int(params.get("lookback_bars", 20))
+    frac_n_before    = int(params.get("fractal_n_before", 5))
+    frac_n_after     = int(params.get("fractal_n_after", 5))
+    trade_direction  = params.get("trade_direction", "both")
+    long_sl_tp_mode  = params.get("long_sl_tp_mode", "pips")
+    long_sl_pips     = float(params.get("long_sl_pips", 200.0))
+    long_tp_pips     = float(params.get("long_tp_pips", 400.0))
+    long_sl_pct      = float(params.get("long_sl_pct", 1.0))
+    long_tp_pct      = float(params.get("long_tp_pct", 2.0))
+    long_atr_sl_mult = float(params.get("long_atr_sl_mult", 1.5))
+    long_atr_tp_mult = float(params.get("long_atr_tp_mult", 3.0))
+    short_sl_tp_mode = params.get("short_sl_tp_mode", "pips")
+    short_sl_pips    = float(params.get("short_sl_pips", 200.0))
+    short_tp_pips    = float(params.get("short_tp_pips", 400.0))
+    short_sl_pct     = float(params.get("short_sl_pct", 1.0))
+    short_tp_pct     = float(params.get("short_tp_pct", 2.0))
+    short_atr_sl_mult = float(params.get("short_atr_sl_mult", 1.5))
+    short_atr_tp_mult = float(params.get("short_atr_tp_mult", 3.0))
 
-    sl_tp_mode      = params.get("sl_tp_mode", "pips")
-    sl_pips         = float(params.get("sl_pips", 200.0))
-    tp_pips         = float(params.get("tp_pips", 400.0))
-    sl_pct          = float(params.get("sl_pct", 1.0))
-    tp_pct          = float(params.get("tp_pct", 2.0))
-
-    entry_mode      = params.get("entry_mode", "close")
+    entry_mode       = params.get("entry_mode", "close")
     entry_offset    = float(params.get("entry_offset_pips", 0.0))
     pending_cancel  = params.get("pending_cancel", "max_bars")
     max_pending_bars = int(params.get("max_pending_bars", 10))
@@ -1938,38 +2036,61 @@ for(int k = 3; k <= InpLookbackBars + 1; k++) {{
 }}
 ```"""
 
-    # ── SL/TP computation section ─────────────────────────────────────────────
-    atr_period   = int(params.get("atr_period", 14))
-    atr_sl_mult  = float(params.get("atr_sl_mult", 1.5))
-    atr_tp_mult  = float(params.get("atr_tp_mult", 3.0))
+    # ── SL/TP computation section (per-direction) ────────────────────────────
+    atr_period = int(params.get("atr_period", 14))
 
-    if sl_tp_mode == "pct":
-        sl_tp_input_group = "sl_tp_mode, sl_pct, tp_pct"
-        sl_tp_desc = f"""**SL/TP mode: pct** — distances are a percentage of the anchor price.
-```
-double sl_dist = anchor * InpSlPct / 100.0;   // default {sl_pct:g}%
-double tp_dist = anchor * InpTpPct / 100.0;   // default {tp_pct:g}%
-```"""
-    elif sl_tp_mode == "atr":
-        sl_tp_input_group = "sl_tp_mode, atr_period, atr_sl_mult, atr_tp_mult"
-        sl_tp_desc = f"""**SL/TP mode: atr** — distances are multiples of ATR(Wilder's EWM), adapting to volatility.
-Create an ATR indicator handle with period {atr_period} (Wilder's smoothing).
-```
-int g_atr_handle = iATR(_Symbol, PERIOD_CURRENT, InpAtrPeriod);
-double atr_buf[1];
-CopyBuffer(g_atr_handle, 0, 1, 1, atr_buf);
-double atr_val = atr_buf[0];
-double sl_dist  = atr_val * InpAtrSlMult;   // default {atr_sl_mult:g} × ATR
-double tp_dist  = atr_val * InpAtrTpMult;   // default {atr_tp_mult:g} × ATR
-```"""
-    else:
-        sl_tp_input_group = f"sl_tp_mode, sl_pips, tp_pips, pip_mult"
-        sl_tp_desc = f"""**SL/TP mode: pips** — fixed pip distances converted to price units.
-Expose `InpPipMult` as `input double` (default **{pip_mult:g}** for {symbol}).
-```
-double sl_dist = InpSlPips / InpPipMult;   // default {sl_pips:g} pips
-double tp_dist = InpTpPips / InpPipMult;   // default {tp_pips:g} pips
-```"""
+    # Direction note
+    _dir_note_pb = {
+        "long_only":  "\n> **Trade Direction**: LONG ONLY — only long signals; skip all short logic.\n",
+        "short_only": "\n> **Trade Direction**: SHORT ONLY — only short signals; skip all long logic.\n",
+    }.get(trade_direction, "")
+
+    def _pb_sl_tp_desc(direction: str) -> str:
+        if direction == "long":
+            mode, sl_p, tp_p, sl_c, tp_c, atr_sl, atr_tp = (
+                long_sl_tp_mode, long_sl_pips, long_tp_pips,
+                long_sl_pct, long_tp_pct, long_atr_sl_mult, long_atr_tp_mult
+            )
+        else:
+            mode, sl_p, tp_p, sl_c, tp_c, atr_sl, atr_tp = (
+                short_sl_tp_mode, short_sl_pips, short_tp_pips,
+                short_sl_pct, short_tp_pct, short_atr_sl_mult, short_atr_tp_mult
+            )
+        label = "Long" if direction == "long" else "Short"
+        if mode == "pct":
+            return (
+                f"**{label} SL/TP mode: pct** — percentage of anchor:\n"
+                f"`sl_dist = anchor * {sl_c:g} / 100.0;  tp_dist = anchor * {tp_c:g} / 100.0;`"
+            )
+        elif mode == "atr":
+            return (
+                f"**{label} SL/TP mode: atr** — ATR({atr_period}) multiples:\n"
+                f"`sl_dist = atr_val * {atr_sl:g};  tp_dist = atr_val * {atr_tp:g};`\n"
+                f"Create `g_atr_handle = iATR(_Symbol, PERIOD_CURRENT, {atr_period});`"
+            )
+        else:  # pips
+            return (
+                f"**{label} SL/TP mode: pips** — fixed pip distances:\n"
+                f"`sl_dist = {sl_p:g} / InpPipMult;  tp_dist = {tp_p:g} / InpPipMult;`\n"
+                f"Expose `InpPipMult` as `input double` (default **{pip_mult:g}** for {symbol})."
+            )
+
+    sl_tp_desc = (
+        _pb_sl_tp_desc("long") + "\n\n" + _pb_sl_tp_desc("short")
+        if trade_direction == "both"
+        else _pb_sl_tp_desc("long" if trade_direction == "long_only" else "short")
+    )
+
+    # Build input group string from both modes
+    _used_modes = {long_sl_tp_mode, short_sl_tp_mode}
+    _sltp_parts = ["long_sl_tp_mode", "short_sl_tp_mode"]
+    if "pips" in _used_modes:
+        _sltp_parts.append("sl_pips/tp_pips (per direction), pip_mult")
+    if "pct" in _used_modes:
+        _sltp_parts.append("sl_pct/tp_pct (per direction)")
+    if "atr" in _used_modes:
+        _sltp_parts.append(f"atr_period, atr_sl_mult/atr_tp_mult (per direction)")
+    sl_tp_input_group = ", ".join(_sltp_parts)
 
     # ── Entry mode section ────────────────────────────────────────────────────
     offset_dist_line = f"double offset_dist = InpEntryOffsetPips / InpPipMult;   // {entry_offset:g} pips offset"
@@ -2084,12 +2205,7 @@ else  // still pending
 
     # ── Input groups ──────────────────────────────────────────────────────────
     level_group = level_det_input_lines
-    if sl_tp_mode == "pct":
-        sltp_group = f"- `\"=== SL / TP ===\"` — sl_tp_mode, sl_pct, tp_pct"
-    elif sl_tp_mode == "atr":
-        sltp_group = f"- `\"=== SL / TP ===\"` — sl_tp_mode, atr_period, atr_sl_mult, atr_tp_mult"
-    else:
-        sltp_group = f"- `\"=== SL / TP ===\"` — sl_tp_mode, sl_pips, tp_pips, pip_mult"
+    sltp_group  = f"- `\"=== Trade Direction & SL/TP ===\"` — trade_direction, {sl_tp_input_group}"
 
     if has_stop_order:
         entry_group = pending_input_lines
@@ -2119,7 +2235,8 @@ Entry is either a market order (close mode, no offset) or a stop order (touch mo
 SL/TP are fixed distances from the anchor price, in pips or % of price.
 
 **Level detector**: {level_detector}
-**SL/TP mode**: {sl_tp_mode}
+**Long SL/TP mode**: {long_sl_tp_mode} | **Short SL/TP mode**: {short_sl_tp_mode}
+**Trade Direction**: {trade_direction}
 **Entry mode**: {entry_mode}{f" (offset {entry_offset:g} pips)" if entry_offset > 0 else ""}
 **EMA Trend Filter**: {ema_filter_label}{tf_note}
 
@@ -2197,7 +2314,7 @@ If open positions for this symbol + magic number ≥ `InpMaxPositions` → retur
 {sl_tp_desc}
 
 ### Step 8 — Evaluate signals with level deduplication
-
+{_dir_note_pb}
 {entry_desc}
 
 {offset_dist_line}

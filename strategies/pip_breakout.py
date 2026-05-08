@@ -45,14 +45,24 @@ class PipBreakoutStrategy(BaseStrategy):
         lookback_bars: int = 20,
         fractal_n_before: int = 5,
         fractal_n_after: int = 5,
-        sl_tp_mode: str = "pips",          # pips | pct | atr
-        sl_pips: float = 200.0,
-        tp_pips: float = 400.0,
-        sl_pct: float = 1.0,
-        tp_pct: float = 2.0,
+        trade_direction: str = "both",
+        # Long (buy) SL/TP
+        long_sl_tp_mode: str = "pips",     # pips | pct | atr
+        long_sl_pips: float = 200.0,
+        long_tp_pips: float = 400.0,
+        long_sl_pct: float = 1.0,
+        long_tp_pct: float = 2.0,
+        long_atr_sl_mult: float = 1.5,
+        long_atr_tp_mult: float = 3.0,
+        # Short (sell) SL/TP
+        short_sl_tp_mode: str = "pips",
+        short_sl_pips: float = 200.0,
+        short_tp_pips: float = 400.0,
+        short_sl_pct: float = 1.0,
+        short_tp_pct: float = 2.0,
+        short_atr_sl_mult: float = 1.5,
+        short_atr_tp_mult: float = 3.0,
         atr_period: int = 14,
-        atr_sl_mult: float = 1.5,
-        atr_tp_mult: float = 3.0,
         entry_offset_pips: float = 0.0,
         entry_mode: str = "close",         # close | touch
         pending_cancel: str = "max_bars",  # none | max_bars | sl_break | both
@@ -84,14 +94,22 @@ class PipBreakoutStrategy(BaseStrategy):
         self.lookback_bars = lookback_bars
         self.fractal_n_before = fractal_n_before
         self.fractal_n_after = fractal_n_after
-        self.sl_tp_mode = sl_tp_mode
-        self.sl_pips = sl_pips
-        self.tp_pips = tp_pips
-        self.sl_pct = sl_pct
-        self.tp_pct = tp_pct
+        self.trade_direction = trade_direction
+        self.long_sl_tp_mode = long_sl_tp_mode
+        self.long_sl_pips = long_sl_pips
+        self.long_tp_pips = long_tp_pips
+        self.long_sl_pct = long_sl_pct
+        self.long_tp_pct = long_tp_pct
+        self.long_atr_sl_mult = long_atr_sl_mult
+        self.long_atr_tp_mult = long_atr_tp_mult
+        self.short_sl_tp_mode = short_sl_tp_mode
+        self.short_sl_pips = short_sl_pips
+        self.short_tp_pips = short_tp_pips
+        self.short_sl_pct = short_sl_pct
+        self.short_tp_pct = short_tp_pct
+        self.short_atr_sl_mult = short_atr_sl_mult
+        self.short_atr_tp_mult = short_atr_tp_mult
         self.atr_period = atr_period
-        self.atr_sl_mult = atr_sl_mult
-        self.atr_tp_mult = atr_tp_mult
         self.entry_offset_pips = entry_offset_pips
         self.entry_mode = entry_mode
         self.pending_cancel = pending_cancel
@@ -205,10 +223,13 @@ class PipBreakoutStrategy(BaseStrategy):
         cur_frac_high: float | None = None
         cur_frac_low:  float | None = None
 
+        allow_long  = self.trade_direction != "short_only"
+        allow_short = self.trade_direction != "long_only"
+
         for i in range(n_bars):
             c        = close_arr[i]
-            long_ok  = ema_ok_long_arr[i]  and trend_ok_long[i]
-            short_ok = ema_ok_short_arr[i] and trend_ok_short[i]
+            long_ok  = allow_long  and ema_ok_long_arr[i]  and trend_ok_long[i]
+            short_ok = allow_short and ema_ok_short_arr[i] and trend_ok_short[i]
 
             if self.level_detector == "fractal":
                 # Update running fractal levels whenever a new one is confirmed
@@ -313,17 +334,34 @@ class PipBreakoutStrategy(BaseStrategy):
 
     def _sl_tp_scalar(self, anchor: float, direction: int, atr: float | None = None) -> tuple[float, float]:
         """Return (sl_price, tp_price) from a scalar anchor price and direction (+1/-1)."""
-        if self.sl_tp_mode == "pct":
-            sl = anchor * (1.0 - self.sl_pct / 100.0) if direction == 1 else anchor * (1.0 + self.sl_pct / 100.0)
-            tp = anchor * (1.0 + self.tp_pct / 100.0) if direction == 1 else anchor * (1.0 - self.tp_pct / 100.0)
-        elif self.sl_tp_mode == "atr" and atr is not None:
-            sl_d = atr * self.atr_sl_mult
-            tp_d = atr * self.atr_tp_mult
+        if direction == 1:
+            mode        = self.long_sl_tp_mode
+            sl_pips     = self.long_sl_pips
+            tp_pips     = self.long_tp_pips
+            sl_pct      = self.long_sl_pct
+            tp_pct      = self.long_tp_pct
+            atr_sl_mult = self.long_atr_sl_mult
+            atr_tp_mult = self.long_atr_tp_mult
+        else:
+            mode        = self.short_sl_tp_mode
+            sl_pips     = self.short_sl_pips
+            tp_pips     = self.short_tp_pips
+            sl_pct      = self.short_sl_pct
+            tp_pct      = self.short_tp_pct
+            atr_sl_mult = self.short_atr_sl_mult
+            atr_tp_mult = self.short_atr_tp_mult
+
+        if mode == "pct":
+            sl = anchor * (1.0 - sl_pct / 100.0) if direction == 1 else anchor * (1.0 + sl_pct / 100.0)
+            tp = anchor * (1.0 + tp_pct / 100.0) if direction == 1 else anchor * (1.0 - tp_pct / 100.0)
+        elif mode == "atr" and atr is not None:
+            sl_d = atr * atr_sl_mult
+            tp_d = atr * atr_tp_mult
             sl   = anchor - sl_d if direction == 1 else anchor + sl_d
             tp   = anchor + tp_d if direction == 1 else anchor - tp_d
         else:  # pips (default)
-            sl_d = self.sl_pips / self.pip_mult
-            tp_d = self.tp_pips / self.pip_mult
+            sl_d = sl_pips / self.pip_mult
+            tp_d = tp_pips / self.pip_mult
             sl   = anchor - sl_d if direction == 1 else anchor + sl_d
             tp   = anchor + tp_d if direction == 1 else anchor - tp_d
         return sl, tp
